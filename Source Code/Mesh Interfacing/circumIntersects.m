@@ -17,8 +17,7 @@ function intersects = circumIntersects(c1,e1,c2,e2)
 		% circumcenters (theta3, from e3).
 		% Depending on how large the angles are, we can make some
 		% simplifications.
-		root2over2 = 1/sqrt(2); % cosine of 45
-		if e1 > root2over2 && e2 > root2over2 && e3 > 0 % can reliably work in cosine space
+		if e1 > 0 && e2 > 0 % can reliably work in cosine space
 			% Convert condition to cosine space, apply cosine identity for
 			% sum of angles. represent sin(theta) as sqrt(1-cos(theta)^2)
 			intersects = e1*e2 - sqrt(1-e1^2)*sqrt(1-e2^2) <= e3;
