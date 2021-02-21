@@ -17,6 +17,7 @@ classdef MapEditor < handle
 	methods (Access = private)
 	end
 	
+	
 	% * * * * * * * * * * * * TOOL MANEGEMENT * * * * * * * * * * * * * * *
 	properties (Access = private)
 		activeTool = 'none';
@@ -106,6 +107,7 @@ classdef MapEditor < handle
 		end
 	end
 	
+	
 	% * * * * * * * * * * * GRAPHICS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		fig;
@@ -113,6 +115,8 @@ classdef MapEditor < handle
 		globeAx;
 		
 		toolButtons = struct();
+		
+		sphereMeshPatch;
 	end
 	methods (Access = private)
 		% Creates all necessary graphics
@@ -161,7 +165,7 @@ classdef MapEditor < handle
 			end
 			
 [points,faces,~,~] = IrregularSpherePoints(2e4);
-this.patchSurface = patch('Vertices',points,'Faces',faces,...
+this.sphereMeshPatch = patch('Vertices',points,'Faces',faces,...
 	'FaceColor','w',...
 	'EdgeColor','none',...
 	'SpecularStrength',0.5);
@@ -203,6 +207,7 @@ end
 		end
 	end
 	
+	
 	% * * * * * * * * * * * * DATA MANAGEMENT * * * * * * * * * * * * * * *
 	properties (Access = private)
 	end
@@ -222,6 +227,8 @@ end
 	% text??? maybe just do this in photoshop? maybe try to
 	%    support vector graphics here?
 	% Custom cursors for each tool
+	% Checkbox for whether to allow globe tilt/roll
+	% button to reset camera view when things get weird.
 	
 	% export maps renders
 		% final destination: flat (no 1/sin() scaling on border widths)   
@@ -233,6 +240,11 @@ end
 	% when lines get stretched out, split them into more segments
 	%    maybe also the reverse, if they're straight enough
 	% undo/redo functionality
+	%    local undo before finalizing an operation
+	%    global undo for full completed operations
+	%    could either support a rollback, or have like an effects
+	%        layer/layer modifier which can have the underlying borders
+	%        modified separately.
 	% import/save/export
 	
 	
@@ -244,8 +256,6 @@ end
 	
 	% Graphics objects
 	properties (Access = private)
-		
-		patchSurface;
 		linework;
 	end
 	

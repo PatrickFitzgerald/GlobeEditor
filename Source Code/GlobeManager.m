@@ -33,6 +33,9 @@ classdef GlobeManager < handle
 		% free-pan is enabled
 		clickPanEnabled = false;
 		
+		% Whether to enforce matlab's standard camera orientation
+		preventCameraTilt = true;
+		
 	end
 	
 	methods (Access = public)
@@ -105,20 +108,40 @@ classdef GlobeManager < handle
 		% Figure level click callback
 		function clickCallback(this,mode)
 			
+			% Determine the mode of operation
+			isMouseDown = strcmp(mode,'MouseDown');
+			isMouseMove = strcmp(mode,'MouseMove');
+			isMouseLift = strcmp(mode,'MouseLift');
+			
+			
 			% Events are rejected if it didn't happen somewhere on the
 			% globe
 			
 			% Determine where the cursor is on the globe
 			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
-			if ~isOnGlobe
-				return
+			% 
+			if this.preventCameraTilt
+				% When these orientation controls are on, it behaves
+				% erratically when you let it update 
+				if ~isOnGlobe && ~isMouseLift
+					return
+				end
+			else % Free pan
+				% If its a drag or a lift, its fine
+				if ~isOnGlobe && isMouseDown
+					return
+				end
 			end
+% 			% If we're still running, either we're on the globe or we're
+% 			% not and the mouse was lifted. Just to be safe, make a
+% 			% sanitized version globeClickPos
+% 			if ~isOnGlobe && isMouseLift
+% 				% This will prevent the assignments below from corrupting
+% 				% the event state
+% 				globeClickPos = this.eventState.xyz_last;
+% 			end
+% 			globeClickPos
 			
-			
-			% Determine the mode of operation
-			isMouseDown = strcmp(mode,'MouseDown');
-			isMouseMove = strcmp(mode,'MouseMove');
-			isMouseLift = strcmp(mode,'MouseLift');
 			% New events are discarded if there is a sustained event
 			% currently active.
 			if this.isSustained && isMouseDown
@@ -147,7 +170,7 @@ classdef GlobeManager < handle
 					this.updateView();
 				end
 				if isMouseLift
-					this.isSustained = false;
+					this.resetEventState();
 				end
 				return
 			end
@@ -280,7 +303,8 @@ classdef GlobeManager < handle
 		end
 		
 		% Determine if and where the user's cursor is intersects the
-		% nearest side of the globe.
+		% nearest side of the globe. If the cursor is not directly above
+		% the globe, the nearest globe point is returned in pos instead.
 		function [isOnGlobe,pos] = getCurrentGlobePoint(this)
 			
 			% Extract where the user's cursor is in 3D space.
@@ -319,7 +343,23 @@ classdef GlobeManager < handle
 				% Just to be safe, normalize it.
 				pos = pos(:,best) / norm(pos(:,best));
 			else
-				pos = nan(3,1);
+				% In the case we're not on the globe, we could modify the
+				% problem solved above to one with a different globe
+				% radius. Currently, with radius = 1, the fact that no
+				% intersections occur is captured by the discriminant being
+				% negative: b^2-4*a*c < 0
+				% Since c really takes the form |backPoint|^2 - radius^2
+				% making the radius large enough would eventually lead to
+				% an intersection, because making c lower makes the
+				% discriminant higher, eventually becoming positive.
+				% Leveraging this, suppose we enlarge the radius to the
+				% exact point this happens, and the discriminat is zero.
+				% This point leads to a double root, exactly at -b/2a
+				% This is the closest the line gets to the origin, and
+				% hence the globe.
+				gamma = -b/2/a;
+				pos = delta .* gamma + backPoint;
+				pos = pos / norm(pos);
 			end
 			
 		end
@@ -328,8 +368,11 @@ classdef GlobeManager < handle
 		% Can pan less or more when panPortion is non-unity
 		function panHelper(this,pan1,pan2,panPortion)
 			
+			pan1 = pan1 / norm(pan1);
+			pan2 = pan2 / norm(pan2);
+			
 			% Create a transformation matrix to rotate pan1 to pan2
-			if all(pan1 == pan2)
+			if all(abs(pan1-pan2)<sqrt(eps))
 				R = eye(3);
 			else % not equal, actual change between them
 				% Create a new set of coordinate axes (orthonormal)
@@ -380,18 +423,27 @@ classdef GlobeManager < handle
 			% Keep the look up vector reasonable. Remove any component
 			% which is left/right (oriented by +z and forward look vec)
 			z = [0;0;1];
-			leftRight = cross(this.lookAtPos,z);
-			if norm(leftRight) < sqrt(eps) % effectively a zero vector
-				leftRight(:) = 0; % don't subtract anything.
-			else
-				leftRight = leftRight / norm(leftRight); % normalize
+			if this.preventCameraTilt
+				leftRight = cross(this.lookAtPos,z);
+				if norm(leftRight) < sqrt(eps) % effectively a zero vector
+					leftRight(:) = 0; % don't subtract anything.
+				else
+					leftRight = leftRight / norm(leftRight); % normalize
+				end
+				this.lookUpVector = this.lookUpVector - leftRight*dot(this.lookUpVector,leftRight);
+				this.lookUpVector = this.lookUpVector / norm(this.lookUpVector);
 			end
-			this.lookUpVector = this.lookUpVector - leftRight*dot(this.lookUpVector,leftRight);
-			this.lookUpVector = this.lookUpVector / norm(this.lookUpVector);
+			
+			% Ensure the up vector and the lookAtPos are independent
+			if abs(dot(this.lookAtPos,this.lookUpVector)) > sqrt(eps)
+				this.lookUpVector = cross(cross(-this.lookAtPos,z),this.lookAtPos);
+				this.lookUpVector = this.lookUpVector / norm(this.lookUpVector);
+			end
 			
 			% Check some extreme failure cases
 			if any(isnan(this.lookAtPos)) || any(isnan(this.lookUpVector)) || ...
-			   any(isinf(this.lookAtPos)) || any(isinf(this.lookUpVector))
+			   any(isinf(this.lookAtPos)) || any(isinf(this.lookUpVector)) || ...
+			   all(this.lookAtPos==0) || all(this.lookUpVector==0)
 				this.lookAtPos    = [1;0;0];
 				this.lookUpVector = [0;0;1];
 			end
