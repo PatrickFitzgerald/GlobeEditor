@@ -9,21 +9,28 @@ classdef GlobeManager < handle
 		% Settings
 		lookAtPos    = [1;0;0];
 		lookUpVector = [0;0;1];
-		isCustomized = false;
 		zoomAmount   = 10.0;
 		
 		% Parameters
-		lockUpVector = false;
-		zoomRate     = 1.02;
-		zoomBounds   = [0.1,30];
+		zoomRate   = 1.025;
+		zoomBounds = [0.1,30];
+		panSpeeds  = [0.5,1.0]; % deg/scroll increment, [up/down,left/right]
 		
 		% Temporary
-		isClicked_pan    = false;
-		isClicked_custom = false;
-		globePos_pan1    = nan(3,1);
-		globePos_pan2    = nan(3,1);
-		globePos_custom1 = nan(3,1);
-		globePos_custom2 = nan(3,1);
+		eventState; % struct, see resetEventState()
+		isSustained = false;
+		
+	end
+	properties (SetAccess = public)
+		
+		% External Callbacks
+		callback_MouseDown function_handle = @(info) [];
+		callback_MouseMove function_handle = @(info) [];
+		callback_MouseLift function_handle = @(info) [];
+		
+		% When true, the custom click/drag callbacks are overridden and the
+		% free-pan is enabled
+		clickPanEnabled = false;
 		
 	end
 	
@@ -31,6 +38,10 @@ classdef GlobeManager < handle
 		
 		% Constructor
 		function this = GlobeManager(varargin)
+			
+			% Initialize the event state
+			this.resetEventState()
+			
 			% Create the axes
 			this.ax = axes(varargin{:},...
 				'Projection','Perspective',...
@@ -44,7 +55,6 @@ classdef GlobeManager < handle
 				'CameraPositionMode','manual',...
 				'CameraTargetMode','manual',... % up vector managed separately
 				'CameraViewAngleMode','manual');
-			this.setLockUpVector(this.lockUpVector);
 			axis(this.ax,'vis3d');
 			
 			% Search in the succession of parents until we find the figure
@@ -75,176 +85,197 @@ classdef GlobeManager < handle
 			ax = this.ax;
 		end
 		
+		% Reset event state
+		function resetEventState(this)
+			this.eventState = struct(...
+				'xyz_start',nan(3,1),...
+				'xyz_last', nan(3,1),...
+				'mod_start',{cell(1,0)},...
+				'mod_last', {cell(1,0)},...
+				'wasDrag',  false ...
+			);
+			this.isSustained = false;
+		end
 		
 	end
 	
 	methods (Access = private)
 		
-		% Figure level callback for anything the user does with their
-		% mouse. Clicking, dragging
+		% Figure level click callback
 		function clickCallback(this,mode)
+			
+			% Events are rejected if it didn't happen somewhere on the
+			% globe
+			
+			% Determine where the cursor is on the globe
+			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
+			if ~isOnGlobe
+				return
+			end
+			
 			
 			% Determine the mode of operation
 			isMouseDown = strcmp(mode,'MouseDown');
 			isMouseMove = strcmp(mode,'MouseMove');
 			isMouseLift = strcmp(mode,'MouseLift');
-			isShifted = ismember('shift',this.fig.CurrentModifier);
+			% New events are discarded if there is a sustained event
+			% currently active.
+			if this.isSustained && isMouseDown
+				return
+			end
+			% Old events are discarded if they have since been discarded
+			if ~this.isSustained && isMouseLift
+				return
+			end
 			
-			% Determine where the cursor is on the globe
-			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
+			% If we're starting a NEW sustained event, record that
+			if isMouseDown
+				this.isSustained = true;
+			end
 			
-			% If no click event is active
-			if ~this.isClicked_pan && ~this.isClicked_custom
-				
-				% To start a new action, the event must be MouseDown
-				if ~isMouseDown
-					return
-				end
-				
-				% To do anything useful, require a valid click location
-				if ~isOnGlobe
-					return
-				end
-				
-				% If shift is active, enable a PAN mode. If no custom
-				% behavior is assigned, treat it as PAN anyways.
-				if isShifted || ~this.isCustomized
-					this.activate_pan(globeClickPos);
-				% Otherwise, enable a CUSTOM mode
-				else
-					this.activate_custom(globeClickPos);
-				end
-				
-			% If we're explicitly in a pan operation
-			elseif this.isClicked_pan && ~this.isClicked_custom
-				
-				% If the user clicked down twice, something went wrong.
+			
+			% If we're in a special pan mode, escape the normal behavior
+			if this.clickPanEnabled
 				if isMouseDown
-					this.forciblyDeactivate();
-					
-				% If cursor moved
-				elseif isMouseMove && isOnGlobe
-					this.update_pan(globeClickPos);
-					
-				% If click was released
-				elseif isMouseLift
-					this.deactivate_pan();
-					
+					this.eventState.xyz_start = globeClickPos;
 				end
-					
-				
-			% If we're explicitly in a custom operation
-			elseif ~this.isClicked_pan && this.isClicked_custom
-				
-				% If the user clicked down twice?, something went wrong.
-				if isMouseDown
-					this.forciblyDeactivate();
-					
-				% If cursor moved
-				elseif isMouseMove && isOnGlobe
-					this.update_custom(globeClickPos);
-					
-				% If click was released
-				elseif isMouseLift
-					this.deactivate_custom();
-					
+				if this.isSustained
+					this.eventState.xyz_last = globeClickPos;
+					% Offload the panning to this helper function
+					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
+					this.updateView();
 				end
+				if isMouseLift
+					this.isSustained = false;
+				end
+				return
+			end
+			
+			
+			% Normal custom callback behavior
+			
+			% Now update the eventState
+			if isMouseDown
 				
-			else % Both are active. Should not be possible
-				this.forciblyDeactivate();
+				this.eventState.xyz_start = globeClickPos;
+				this.eventState.xyz_last  = globeClickPos;
+				this.eventState.mod_start = this.fig.CurrentModifier;
+				this.eventState.mod_last  = this.fig.CurrentModifier;
+				% Leave this.eventState.wasDrag alone
+				
+				% Invoke callback
+				this.callback_MouseDown(this.eventState);
+				% No Cleanup now
+				
+			elseif isMouseMove && ~this.isSustained % no clicking
+				
+				% Since this event is not sustained, populate all its
+				% information fresh
+				this.eventState.xyz_start = globeClickPos;
+				this.eventState.xyz_last  = globeClickPos;
+				this.eventState.mod_start = this.fig.CurrentModifier;
+				this.eventState.mod_last  = this.fig.CurrentModifier;
+				this.eventState.wasDrag   = false;
+				
+				% Invoke callback
+				this.callback_MouseMove(this.eventState);
+				% Perform cleanup
+				this.resetEventState();
+				
+			elseif isMouseMove && this.isSustained % Moving while clicked
+				
+				% Leave this.eventState.xyz_start alone
+				this.eventState.xyz_last  = globeClickPos;
+				% Leave this.eventState.mod_start alone
+				this.eventState.mod_last  = this.fig.CurrentModifier;
+				this.eventState.wasDrag   = true;
+				
+				% Invoke callback
+				this.callback_MouseMove(this.eventState);
+				% No cleanup now
+				
+			elseif isMouseLift
+				
+				% Leave this.eventState.xyz_start alone
+				this.eventState.xyz_last  = globeClickPos;
+				% Leave this.eventState.mod_start alone
+				this.eventState.mod_last  = this.fig.CurrentModifier;
+				% Leave this.eventState.wasDrag   alone
+				
+				% Invoke callback
+				this.callback_MouseLift(this.eventState);
+				% Perform cleanup
+				this.resetEventState()
+				
 			end
 			
 		end
+		% Figure level scroll callback
 		function scrollCallback(this,event)
 			
-			% Determine where the cursor is on the globe
-			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
+			% Check for some modifiers
+			isPressed_shift   = ismember('shift',  this.fig.CurrentModifier);
+			isPressed_control = ismember('control',this.fig.CurrentModifier);
 			
-			% Determine a reference point for the zoom. This will be used
-			% to do some slight panning when zooming in
-			if isOnGlobe
-				zoomRefPos = globeClickPos;
-			else % Not on globe, use currently viewed center
-				zoomRefPos = this.lookAtPos;
-			end
+			% Use the event data to determine whether we're zooming in or out
+			scrollSign = -event.VerticalScrollCount; % -1 or +1
 			
-			% Use the event data to determine whether we're zooming in or
-			% out
-			zoomSign = event.VerticalScrollCount; % -1 or +1
-			
-			oldZoomAmount = this.zoomAmount; % store for comparison later
-			% Apply the zoom
-			this.zoomAmount = this.zoomAmount * this.zoomRate^zoomSign;
-			% Enforce constraints
-			this.zoomAmount = max(this.zoomBounds(1),min(this.zoomAmount,this.zoomBounds(2)));
-			
-			% See if we changed anything.
-			didZoom = this.zoomAmount ~= oldZoomAmount;
-			
-			% If we did change anything, update the visuals
-			if didZoom
-				% If we know there's something to apply, and if we're
-				% zooming in, add to the visual smoothness by also panning
-				% slightly towards wherever the user's cursor is.
-				if zoomSign < 0
-					this.panHelper(zoomRefPos,this.lookAtPos,this.zoomRate-1);
-% I would like to make the pan amount more precise -- to keep the reference
-% point under the same pixel on the user's screen -- but this seems fine
-% for now.
+			% If control is pressed, zoom.
+			if isPressed_control
+				
+				% Determine where the cursor is on the globe
+				[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
+				
+				% Determine a reference point for the zoom. This will be used
+				% to do some slight panning when zooming in
+				if isOnGlobe
+					zoomRefPos = globeClickPos;
+				else % Not on globe, use currently viewed center
+					zoomRefPos = this.lookAtPos;
 				end
+				
+				zoomSign = -scrollSign;
+				
+				oldZoomAmount = this.zoomAmount; % store for comparison later
+				% Apply the zoom
+				this.zoomAmount = this.zoomAmount * this.zoomRate^zoomSign;
+				% Enforce constraints
+				this.zoomAmount = max(this.zoomBounds(1),min(this.zoomAmount,this.zoomBounds(2)));
+				
+				% If we did change anything, update the visuals
+				if this.zoomAmount ~= oldZoomAmount
+					% If we know there's something to apply, and if we're
+					% zooming in, add to the visual smoothness by also panning
+					% slightly towards wherever the user's cursor is.
+					this.panHelper(zoomRefPos,this.lookAtPos,1-this.zoomRate^(2*zoomSign));
+					% Update camera settings
+					this.updateView()
+				end
+				
+			else % no control pressed, just pan
+				
+				% If shift is pressed, pan = rotate about +z (global yaw)
+				if isPressed_shift
+					angle_deg = this.panSpeeds(2)*scrollSign * this.zoomAmount;
+					R = rotz(angle_deg);
+				else % not shifted, pan = rotate towards or away from poles (local pitch)
+					angle_deg = this.panSpeeds(1)*scrollSign * this.zoomAmount;
+					% Limit this rotation if we're going to rotate past a
+					% pole
+					bounds_deg = [-1,+1] .* acosd([-1,+1]*dot(this.lookAtPos,[0;0;1])); % find distance to each pole from current position
+					angle_deg = max(bounds_deg(1),min(angle_deg,bounds_deg(2)));
+					R = this.localToGlobalTransform( roty(angle_deg) );
+				end
+				
+				% Apply that transformation matrix
+				this.lookAtPos    = R * this.lookAtPos;
+				this.lookUpVector = R * this.lookUpVector;
+				
 				% Update camera settings
 				this.updateView()
+				
 			end
 			
-		end
-		
-		% Activates PAN mode
-		function activate_pan(this,globePos)
-			this.isClicked_pan = true;
-			this.globePos_pan1 = globePos;
-			this.globePos_pan2 = globePos;
-		end
-		% Activates CUSTOM mode
-		function activate_custom(this,globePos)
-			this.isClicked_custom = true;
-			this.globePos_custom1 = globePos;
-			this.globePos_custom2 = globePos;
-		end
-		% Update PAN mode
-		function update_pan(this,globePos)
-			this.globePos_pan2 = globePos;
-			
-			% Offload the panning to this helper function
-			this.panHelper(this.globePos_pan1,this.globePos_pan2,1.0); % 1.0 = pan by the full amount
-			
-			% Update the camera settings
-			this.updateView();
-			
-		end
-		% Update CUSTOM mode
-		function update_custom(this,globePos)
-			this.globePos_custom2 = globePos;
-		end
-		% Deactivates PAN mode
-		function deactivate_pan(this)
-			this.isClicked_pan = false;
-			this.globePos_pan1 = nan(3,1);
-			this.globePos_pan2 = nan(3,1);
-		end
-		% Deactivates CUSTOM mode
-		function deactivate_custom(this)
-			this.isClicked_custom = false;
-			this.globePos_custom1 = nan(3,1);
-			this.globePos_custom2 = nan(3,1);
-		end
-		% Forcibly deactivate all modes
-		function forciblyDeactivate(this)
-			% Reset the current state
-			this.deactivate_pan();
-			this.deactivate_custom();
-			% Throw an error. This will terminate anything running, but
-			% with the state fixed, the user should be able to resume.
-			warning('The GlobeAxes somehow entered an invalid state.')
 		end
 		
 		% Determine if and where the user's cursor is intersects the
@@ -321,43 +352,64 @@ classdef GlobeManager < handle
 			this.lookAtPos    = R' * this.lookAtPos; % transpose to undo this, to bring the points into coincidence
 			this.lookUpVector = R' * this.lookUpVector; % transform in unison
 			
-			% Conditionally force the up vector to the normal behavior
-			if this.lockUpVector
-				this.lookUpVector = [0;0;1];
-			end
+		end
+		% Converts (right-handed) transformation matrices (R) from local
+		% Forward-Left-Up coordinate systems to the global coordinates.
+		% Matrices are intended to left-multiply column vectors.
+		function R_ = localToGlobalTransform(this,R)
+			% Create a new set of coordinate axes (orthonormal)
+			v1 = -this.lookAtPos; % FORWARD
+			v2 = this.lookUpVector - v1 * dot(v1,this.lookUpVector); v2 = v2 / norm(v2); % UP
+			v3 = -cross(v1,v2); % already normalized, LEFT
 			
-			% Just to be safe, renormalize these vectors
-			this.lookAtPos    = this.lookAtPos    / norm(this.lookAtPos   );
+			% Represent the R matrix in terms of the global coordinates
+			%  1. projecting onto the F-L-U (v1-v3-v2) basis
+			%  2. applying a simple rotation about v3
+			%  3. recasting the point into the original coordinates
+			V = [v1,v3,v2]; % F-L-U (odd number order to be right handed)
+			R_ = V * R * V';
+		end
+		
+		% To avoid any weird behavior, renormalize the lookAtPos and
+		% lookUpVector
+		function renormalizeCameraSettings(this)
+			% Normalize the look at position
+			this.lookAtPos = this.lookAtPos / norm(this.lookAtPos);
+			
+			% Keep the look up vector reasonable. Remove any component
+			% which is left/right (oriented by +z and forward look vec)
+			z = [0;0;1];
+			leftRight = cross(this.lookAtPos,z);
+			if norm(leftRight) < sqrt(eps) % effectively a zero vector
+				leftRight(:) = 0; % don't subtract anything.
+			else
+				leftRight = leftRight / norm(leftRight); % normalize
+			end
+			this.lookUpVector = this.lookUpVector - leftRight*dot(this.lookUpVector,leftRight);
 			this.lookUpVector = this.lookUpVector / norm(this.lookUpVector);
 			
+			% Check some extreme failure cases
+			if any(isnan(this.lookAtPos)) || any(isnan(this.lookUpVector)) || ...
+			   any(isinf(this.lookAtPos)) || any(isinf(this.lookUpVector))
+				this.lookAtPos    = [1;0;0];
+				this.lookUpVector = [0;0;1];
+			end
 		end
-		
 		% Update the orientation of the camera
 		function updateView(this)
+			
+			% Prevent some wonky behavior...
+			this.renormalizeCameraSettings();
+			
+			% Update the camera settings
 			this.ax.CameraPosition = this.lookAtPos'*(1+this.zoomAmount);
 			this.ax.CameraTarget   = this.lookAtPos';
-			if ~this.lockUpVector
-				this.ax.CameraUpVector = this.lookUpVector';
-			end
+			this.ax.CameraUpVector = this.lookUpVector';
 			this.ax.CameraViewAngle = 10;
 % Hard coded value...
-		end
-		
-		% In an attempt to make the up vector behavior more reasonable, I
-		% tried this wrapper. Doesn't seem to have fixed anything.
-		function setLockUpVector(this,doLock)
-			this.lockUpVector = doLock;
-			if doLock
-				this.ax.CameraUpVector = [0,0,1];
-				this.ax.CameraUpVectorMode = 'auto';
-			else
-				this.ax.CameraUpVectorMode = 'manual';
-			end
+			
 		end
 		
 	end
-	
-	% get high res screen shot
-	% manage undoing/redoing
 	
 end
