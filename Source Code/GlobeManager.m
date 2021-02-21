@@ -26,6 +26,7 @@ classdef GlobeManager < handle
 		% External Callbacks
 		callback_MouseDown function_handle = @(info) [];
 		callback_MouseMove function_handle = @(info) [];
+		callback_MouseDrag function_handle = @(info) [];
 		callback_MouseLift function_handle = @(info) [];
 		
 		% When true, the custom click/drag callbacks are overridden and the
@@ -191,7 +192,7 @@ classdef GlobeManager < handle
 				this.eventState.wasDrag   = true;
 				
 				% Invoke callback
-				this.callback_MouseMove(this.eventState);
+				this.callback_MouseDrag(this.eventState);
 				% No cleanup now
 				
 			elseif isMouseLift
