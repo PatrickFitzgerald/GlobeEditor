@@ -115,16 +115,33 @@ classdef GlobeManager < handle
 			
 			
 			% Events are rejected if it didn't happen somewhere on the
-			% globe
+			% globe, except for edge cases.
 			
 			% Determine where the cursor is on the globe
 			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
-			% 
+			% We need some unreasonably complicated conditional behavior to
+			% make the preventCameraTilt cases not be wonky.
 			if this.preventCameraTilt
 				% When these orientation controls are on, it behaves
 				% erratically when you let it update 
-				if ~isOnGlobe && ~isMouseLift
+				if ~isOnGlobe && isMouseDown
 					return
+				end
+				% If we're not on the globe, and we're sustained, and we
+				% are either in a Move or Lift mode, we want to keep the
+				% camera still, and not distort any externally meaningful
+				% state information.
+				if ~isOnGlobe && this.isSustained
+					% This will prevent the assignments below from
+					% corrupting the event state
+					if this.clickPanEnabled
+						% Setting this to xyz_start will prevent it from
+						% panning
+						globeClickPos = this.eventState.xyz_start;
+					else
+						% Keep the state unchanged
+						globeClickPos = this.eventState.xyz_last;
+					end
 				end
 			else % Free pan
 				% If its a drag or a lift, its fine
@@ -132,15 +149,6 @@ classdef GlobeManager < handle
 					return
 				end
 			end
-% 			% If we're still running, either we're on the globe or we're
-% 			% not and the mouse was lifted. Just to be safe, make a
-% 			% sanitized version globeClickPos
-% 			if ~isOnGlobe && isMouseLift
-% 				% This will prevent the assignments below from corrupting
-% 				% the event state
-% 				globeClickPos = this.eventState.xyz_last;
-% 			end
-% 			globeClickPos
 			
 			% New events are discarded if there is a sustained event
 			% currently active.
@@ -158,24 +166,6 @@ classdef GlobeManager < handle
 			end
 			
 			
-			% If we're in a special pan mode, escape the normal behavior
-			if this.clickPanEnabled
-				if isMouseDown
-					this.eventState.xyz_start = globeClickPos;
-				end
-				if this.isSustained
-					this.eventState.xyz_last = globeClickPos;
-					% Offload the panning to this helper function
-					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
-					this.updateView();
-				end
-				if isMouseLift
-					this.resetEventState();
-				end
-				return
-			end
-			
-			
 			% Normal custom callback behavior
 			
 			% Now update the eventState
@@ -188,7 +178,12 @@ classdef GlobeManager < handle
 				% Leave this.eventState.wasDrag alone
 				
 				% Invoke callback
-				this.callback_MouseDown(this.eventState);
+				if this.clickPanEnabled % Direct pan mode
+					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
+					this.updateView();
+				else % custom callbacks
+					this.callback_MouseDown(this.eventState);
+				end
 				% No Cleanup now
 				
 			elseif isMouseMove && ~this.isSustained % no clicking
@@ -202,7 +197,12 @@ classdef GlobeManager < handle
 				this.eventState.wasDrag   = false;
 				
 				% Invoke callback
-				this.callback_MouseMove(this.eventState);
+				if this.clickPanEnabled % Direct pan mode
+					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
+					this.updateView();
+				else % custom callbacks
+					this.callback_MouseMove(this.eventState);
+				end
 				% Perform cleanup
 				this.resetEventState();
 				
@@ -215,7 +215,12 @@ classdef GlobeManager < handle
 				this.eventState.wasDrag   = true;
 				
 				% Invoke callback
-				this.callback_MouseDrag(this.eventState);
+				if this.clickPanEnabled % Direct pan mode
+					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
+					this.updateView();
+				else % custom callbacks
+					this.callback_MouseDrag(this.eventState);
+				end
 				% No cleanup now
 				
 			elseif isMouseLift
@@ -227,7 +232,13 @@ classdef GlobeManager < handle
 				% Leave this.eventState.wasDrag   alone
 				
 				% Invoke callback
-				this.callback_MouseLift(this.eventState);
+				if this.clickPanEnabled % Direct pan mode
+					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
+					this.updateView();
+				else % custom callbacks
+					this.callback_MouseLift(this.eventState);
+				end
+				
 				% Perform cleanup
 				this.resetEventState()
 				
