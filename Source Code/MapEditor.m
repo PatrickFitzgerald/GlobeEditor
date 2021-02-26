@@ -1,9 +1,66 @@
 classdef MapEditor < handle
 	
+	% * * * * * * * * * * * * * * GENERAL * * * * * * * * * * * * * * * * *
+	properties (Access = private)
+		lastFullSaveDatenum = nan; % never saved
+		lastAutoSaveDatenum = nan; % never saved
+		lastModifiedDatenum = nan; % never modified
+		
+		isInitialized = false;
+	end
+	methods (Access = public)
+		% Constructor
+		function this = MapEditor()
+			
+			% Manage matlab path
+			AddPaths;
+			
+			% Load settings, if available
+			this.loadSettings();
+			
+			% Create the graphics for the editor
+			this.createGraphics();
+			
+			% Enable the default tool
+			this.tool_enable_pan();
+			
+			% Now that we've finished the constructor, mark this object as
+			% initialized.
+			this.isInitialized = true;
+			
+		end
+	end
+	methods (Access = private)
+		% Returns install directory
+		function installDir = getInstallDir(~)
+			[installDir,~,~] = fileparts(mfilename('fullpath'));
+		end
+		% Returns the path to the user data directory stored next to the
+		% install. If the folder doesn't exist yet, it makes it.
+		function userDataDir = getUserDataDir(this)
+			% Determine the path of the user data
+			installDir = this.getInstallDir();
+			userDataDir = fullfile(installDir,'User Data');
+			% Safely make the folder if it doesn't exist, leave it alone if
+			% it does.
+			[~,~,~] = mkdir(userDataDir);
+		end
+		% Perform autosave
+		function autosave(this)
+			% update lastAutoSaveDatenum
+			% NOT DONE
+		end
+		% Cleanup autosave content
+		function haltAutosave(this)
+			% clean up autosave files
+			% NOT DONE
+		end
+	end
+	
+	
 	% * * * * * * * * * * * SETTINGS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		sizes = struct(...
-			'figurePosition',[100,100,1200,900],...
 			'toolButtonHeight',  30,...
 			'toolButtonWidth',   50,...
 			'toolButtonVSpacing',10,...
@@ -13,8 +70,151 @@ classdef MapEditor < handle
 			'space',[1,1,1]*0.1,...
 			'uiBackground',[1,1,1]*0.2 ...
 		);
+		settings = struct(... % UPDATE set.settings() and loadSettings() TO MATCH
+			'figurePosition',[100,100,1200,900],...
+			'doAutosave',true,...
+			'autosavePeriod_s',300,...
+			'lockCameraOrientation',true...
+		);
 	end
 	methods (Access = private)
+		% Returns the path to the settings file. Makes folders as necessary
+		function settingsPath = getSettingsPath(this)
+			% Get the path to the user data directory. Guarantees folder
+			% existence.
+			userDataDir = this.getUserDataDir();
+			% Specify the settings path relative to that.
+			settingsPath = fullfile(userDataDir,'settings.mat');
+		end
+		% Load settings from file. Load status = 0 means nothing was
+		% loaded. 1 means everything was loaded without issue. 0.5 means
+		% not all the saved settings could be loaded.
+		function loadStatus = loadSettings(this)
+			% Get the settings path. Guarantees folder exists, but not
+			% necessarily the file exists.
+			settingsPath = this.getSettingsPath();
+			
+			% As a fallback, state that nothing was loaded.
+			loadStatus = 0;
+			
+			% Carefully check the file
+			if exist(settingsPath,'file')
+				try
+					% Try to load the data
+					loadedData = load(settingsPath,'settings');
+					settingsL = loadedData.settings; % L = loaded
+					% Settings must be a struct
+					if ~isa(settingsL,'struct')
+						error('');
+					end
+				catch err %#ok<NASGU>
+					fprintf(1,'Settings file existed but was invalid.\n');
+				end
+			else
+				return
+			end
+			
+			% If that was successful (i.e. we're still running), copy over
+			% the parameters which are valid.
+			% Default to everything being loaded correctly
+			loadStatus = 1;
+			settingsU = this.settings; % U = usable, overwrite current values.
+			% These checks aren't going to be exhaustive...
+			isScalarBool = @(v) isscalar(v) && (isa(v,'logical') || ismember(v,[0,1]));
+			checks = {
+				'figurePosition',        @(v) isnumeric(v) && isvector(v) && numel(v)==4 && all(imag(v)==0) && all(v(3:4)>0);
+				'doAutosave',            @(v) isScalarBool(v);
+				'autosavePeriod_s',      @(v) isnumeric(v) && isscalar(v) && imag(v)==0 && v>0;
+				'lockCameraOrientation', @(v) isScalarBool(v);
+			};
+			% Loop over each expected field. All we know right now is that
+			% settingsL is a struct.
+			fields_ = fields(settingsL);
+			for checkInd = 1:size(checks,1)
+				expectedField = checks{checkInd,1};
+				checkFunc     = checks{checkInd,2};
+				% Check for the existence of the field, and then check its
+				% value
+				if ~ismember(expectedField,fields_) && checkFunc( settingsL.(expectedField) )
+					% Passed check, copy it into settingsU
+					settingsU.(expectedField) = settingsL.(expectedField);
+				else
+					% Failed at least once, mark it as such.
+					loadStatus = 0.5;
+				end
+			end
+			
+			% Now apply the settings. The set.settings() method handles
+			% checking what actually changed.
+			this.settings = settingsU;
+			
+		end
+		% Save settings to file
+		function saveSettings(this)
+			% Get the settings path. Guarantees folder exists.
+			settingsPath = getSettingsAutosavePath();
+			
+			% Extract off a copy of everything we plan to save
+			settings = this.settings; %#ok<NASGU,PROP>
+			
+			try
+				save(settingsPath,'settings');
+			catch err
+				fprintf(1,'Something went wrong when trying to save the settings.\n');
+				rethrow(err);
+			end
+		end
+	end
+	methods
+		% This effectively catches whenever the settings are modified
+		function set.settings(this,settingsNew)
+			
+			% Make a copy of the old settings, in case we need to compare
+			settingsOld = this.settings;
+			
+			% Determine what changed
+			changedFields = {};
+			for field = fields(settingsNew)'
+				if ~isequal( settingsOld.(field{1}), settingsNew.(field{1}) )
+					changedFields(end+1) = field; %#ok<AGROW>
+				end
+			end
+			
+			% Assign the settings
+			this.settings = settingsNew;
+			
+			
+			% Don't update settings elsewhere if most of the MapEditor has
+			% not been instantiated yet.
+			if ~this.isInitialized %#ok<MCSUP>
+				return;
+			end
+			
+			
+			% Perform any necessary updating now. Separate IF checks in
+			% case multiple changed.
+			if ismember('figurePosition',changedFields)
+				% Nothing here, this setting happens after the GUI is
+				% updated
+			end
+			if ismember('doAutosave',changedFields)
+				if settingsNew.doAutosave % New settings are to autosave
+					this.autosave();
+				else
+					this.haltAutosave();
+				end
+			end
+			if ismember('autosavePeriod_s',changedFields)
+				% Just to be lazy, simply run a new autosave, let it handle
+				% the details.
+				this.autosave();
+			end
+			if ismember('lockCameraOrientation',changedFields)
+				% Update this setting in the globe manager
+				this.globeManager.preventCameraTilt = this.settings.lockCameraOrientation; %#ok<MCSUP>
+			end
+			
+		end
 	end
 	
 	
@@ -123,7 +323,7 @@ classdef MapEditor < handle
 		function createGraphics(this)
 			
 			this.fig = figure(...
-				'Position',this.sizes.figurePosition,...
+				'Position',this.settings.figurePosition,...
 				'Color',this.palette.space,...
 				'DockControls','off',...
 				'MenuBar','none',...
@@ -133,6 +333,8 @@ classdef MapEditor < handle
 			% On that figure, create a set of axes with convenient
 			% callbacks and state management.
 			this.globeManager = GlobeManager();
+			% Apply some settings right away:
+			this.globeManager.preventCameraTilt = this.settings.lockCameraOrientation;
 			% Get the underlying axes so we can plot to it.
 			this.globeAx = this.globeManager.getAxesHandle();
 			% These axes are designed for 3D plotting on the unit sphere.
@@ -164,7 +366,7 @@ classdef MapEditor < handle
 				);
 			end
 			
-[points,faces,~,~] = IrregularSpherePoints(2e4);
+[points,faces,~,~] = IrregularSpherePoints(3e4);
 this.sphereMeshPatch = patch('Vertices',points,'Faces',faces,...
 	'FaceColor','w',...
 	'EdgeColor','none',...
@@ -173,8 +375,8 @@ this.sphereMeshPatch = patch('Vertices',points,'Faces',faces,...
 lightPosition = [5,0,1.5];
 lightColor = [255,247,164]/255;
 light('Color',lightColor,'Position',lightPosition);
-
-this.linework = plot3(this.globeAx,nan,nan,nan,'-o');
+% 
+% this.linework = plot3(this.globeAx,nan,nan,nan,'-o');
 
 dataFolder = 'Earth Data';
 % dataName = '\110m_cultural\ne_110m_admin_0_countries'; % omit .shp
@@ -212,6 +414,7 @@ end
 	properties (Access = private)
 	end
 	methods (Access = private)
+		% When loading a file from file, set the lastSaveDatenum to now()
 	end
 	
 	
@@ -227,8 +430,15 @@ end
 	% text??? maybe just do this in photoshop? maybe try to
 	%    support vector graphics here?
 	% Custom cursors for each tool
-	% Checkbox for whether to allow globe tilt/roll
 	% button to reset camera view when things get weird.
+	% Checkbox for 'lock selection'
+	% copy paste???
+	
+	% autosave: doAutosave, autosavePeriod_s
+	% populate autosave
+	% Checkbox for whether to allow globe tilt/roll
+	% retain settings between sessions. update set.settings()
+	% modify settings.figurePosition and object placement on figure resize
 	
 	% export maps renders
 		% final destination: flat (no 1/sin() scaling on border widths)   
@@ -246,94 +456,5 @@ end
 	%        layer/layer modifier which can have the underlying borders
 	%        modified separately.
 	% import/save/export
-	
-	
-	
-	
-	
-	
-	
-	
-	% Graphics objects
-	properties (Access = private)
-		linework;
-	end
-	
-	% Working data
-	properties
-		workingPoints;
-	end
-	
-	% Functions
-	methods
-		
-		function this = MapEditor()
-			
-			% Create the graphics for the editor
-			this.createGraphics();
-			
-			% Enable the default tool
-			this.tool_enable_pan();
-			
-			
-			
-		end
-		
-		function redraw(this)
-			
-			this.linework.XData = this.workingPoints(:,1);
-			this.linework.YData = this.workingPoints(:,2);
-			this.linework.ZData = this.workingPoints(:,3);
-			
-		end
-		
-		
-		
-		function click(this,event,mode)
-			
-			isScrollEvent = mode == 4;
-			
-			
-			if mode == 2 && this.isClicked || mode == 3
-				
-				pos = this.getCurrentPoint();
-				this.updatePoints(pos-this.refPos);
-				this.redraw();
-				if mode == 3
-					this.origPoints = this.points;
-					this.isClicked = false;
-					this.refPos = nan(1,2);
-				end
-			elseif mode == 1 % Click activated
-				this.isClicked = true;
-				this.refPos = this.getCurrentPoint();
-			elseif isScrollEvent
-				disp('scrolled') % event
-			end
-			
-		end
-		
-		function pos = getCurrentPoint(this)
-			xyz = get(this.ax,'CurrentPoint');
-			frontPoint = xyz(1,:);
-			backPoint  = xyz(2,:);
-			
-			pos = frontPoint(1:2);
-		end
-		
-		function updatePoints(this,translation)
-			
-			points_ = this.origPoints;
-			
-			% measure the distance between points and the reference
-			range = 1;
-			strength = exp(-sum((this.refPos - points_).^2,2)/2/range^2);
-			correctedTranslation = translation .* strength;
-			
-			this.points = points_ + correctedTranslation;
-			
-		end
-		
-	end
 	
 end
