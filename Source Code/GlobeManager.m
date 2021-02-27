@@ -31,10 +31,10 @@ classdef GlobeManager < handle
 		
 		% When true, the custom click/drag callbacks are overridden and the
 		% free-pan is enabled
-		clickPanEnabled = false;
+		clickPanEnabled logical = false;
 		
 		% Whether to enforce matlab's standard camera orientation
-		preventCameraTilt = true;
+		preventCameraTilt logical = true;
 		
 	end
 	
@@ -94,6 +94,8 @@ classdef GlobeManager < handle
 			this.eventState = struct(...
 				'xyz_start',nan(3,1),...
 				'xyz_last', nan(3,1),...
+				'wasDirect_start',false,...
+				'wasDirect_last', false,...
 				'mod_start',{cell(1,0)},...
 				'mod_last', {cell(1,0)},...
 				'wasDrag',  false ...
@@ -140,7 +142,7 @@ classdef GlobeManager < handle
 						globeClickPos = this.eventState.xyz_start;
 					else
 						% Keep the state unchanged
-						globeClickPos = this.eventState.xyz_last;
+						%    globeClickPos = globeClickPos;
 					end
 				end
 			else % Free pan
@@ -173,6 +175,8 @@ classdef GlobeManager < handle
 				
 				this.eventState.xyz_start = globeClickPos;
 				this.eventState.xyz_last  = globeClickPos;
+				this.eventState.wasDirect_start = isOnGlobe;
+				this.eventState.wasDirect_last  = isOnGlobe;
 				this.eventState.mod_start = this.fig.CurrentModifier;
 				this.eventState.mod_last  = this.fig.CurrentModifier;
 				% Leave this.eventState.wasDrag alone
@@ -192,6 +196,8 @@ classdef GlobeManager < handle
 				% information fresh
 				this.eventState.xyz_start = globeClickPos;
 				this.eventState.xyz_last  = globeClickPos;
+				this.eventState.wasDirect_start = isOnGlobe;
+				this.eventState.wasDirect_last  = isOnGlobe;
 				this.eventState.mod_start = this.fig.CurrentModifier;
 				this.eventState.mod_last  = this.fig.CurrentModifier;
 				this.eventState.wasDrag   = false;
@@ -210,6 +216,8 @@ classdef GlobeManager < handle
 				
 				% Leave this.eventState.xyz_start alone
 				this.eventState.xyz_last  = globeClickPos;
+				% Leave this.eventState.wasDirect_start alone
+				this.eventState.wasDirect_last = isOnGlobe;
 				% Leave this.eventState.mod_start alone
 				this.eventState.mod_last  = this.fig.CurrentModifier;
 				this.eventState.wasDrag   = true;
@@ -227,6 +235,8 @@ classdef GlobeManager < handle
 				
 				% Leave this.eventState.xyz_start alone
 				this.eventState.xyz_last  = globeClickPos;
+				% Leave this.eventState.wasDirect_start alone
+				this.eventState.wasDirect_last = isOnGlobe;
 				% Leave this.eventState.mod_start alone
 				this.eventState.mod_last  = this.fig.CurrentModifier;
 				% Leave this.eventState.wasDrag   alone
@@ -234,7 +244,7 @@ classdef GlobeManager < handle
 				% Invoke callback
 				if this.clickPanEnabled % Direct pan mode
 					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
-					this.updateView();
+					this.updateView(this.preventCameraTilt); % Conditionally force the viewed orientation to be normal, now that the user is done clicking
 				else % custom callbacks
 					this.callback_MouseLift(this.eventState);
 				end
@@ -426,8 +436,9 @@ classdef GlobeManager < handle
 		end
 		
 		% To avoid any weird behavior, renormalize the lookAtPos and
-		% lookUpVector
-		function renormalizeCameraSettings(this)
+		% lookUpVector. forceOrientation is optional: when true, it will
+		% ensure the camera is oriented correctly.
+		function renormalizeCameraSettings(this,forceOrientation)
 			% Normalize the look at position
 			this.lookAtPos = this.lookAtPos / norm(this.lookAtPos);
 			
@@ -451,6 +462,15 @@ classdef GlobeManager < handle
 				this.lookUpVector = this.lookUpVector / norm(this.lookUpVector);
 			end
 			
+			% Apply the special correction
+			if exist('forceOrientation','var') && forceOrientation % exists and is true
+				% If the lookUpVector and +z are in different directions,
+				% flip the up vector.
+				if dot(z,this.lookUpVector) < -sqrt(eps)
+					this.lookUpVector = -this.lookUpVector;
+				end
+			end
+			
 			% Check some extreme failure cases
 			if any(isnan(this.lookAtPos)) || any(isnan(this.lookUpVector)) || ...
 			   any(isinf(this.lookAtPos)) || any(isinf(this.lookUpVector)) || ...
@@ -459,11 +479,12 @@ classdef GlobeManager < handle
 				this.lookUpVector = [0;0;1];
 			end
 		end
-		% Update the orientation of the camera
-		function updateView(this)
+		% Update the orientation of the camera. ARguments, if any, get
+		% passed to renormalizeCameraSettings.
+		function updateView(this,varargin)
 			
 			% Prevent some wonky behavior...
-			this.renormalizeCameraSettings();
+			this.renormalizeCameraSettings(varargin{:});
 			
 			% Update the camera settings
 			this.ax.CameraPosition = this.lookAtPos'*(1+this.zoomAmount);
