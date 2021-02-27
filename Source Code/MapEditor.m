@@ -220,13 +220,15 @@ classdef MapEditor < handle
 	
 	% * * * * * * * * * * * * TOOL MANEGEMENT * * * * * * * * * * * * * * *
 	properties (Access = private)
-		activeTool = 'none';
+		activeTool   = 'none';
+		toolLiveData = struct();
+		toolIsLive   = false;
+		
+		tool_callback_confirm   = @() [];
+		tool_callback_reject    = @() [];
+		tool_callback_localUndo = @() [];
 	end
 	methods (Access = private)
-% this.globeManager.callback_MouseDown = @this.clickDown;
-% this.globeManager.callback_MouseMove = @this.clickMove;
-% this.globeManager.callback_MouseDrag = @this.clickDrag;
-% this.globeManager.callback_MouseLift = @this.clickLift;
 		% Enable select tool
 		function tool_enable_select(this)
 			
@@ -255,6 +257,22 @@ classdef MapEditor < handle
 			
 			% Start by cleaning up whatever tool was previously working
 			this.tool_cleanup();
+			
+			% Assign the pertinent callbacks
+			% External
+			this.globeManager.callback_MouseDown = @(info)this.tool_function_pencil('fresh',  info);
+			this.globeManager.callback_MouseMove = @(info)this.tool_function_pencil('trial',  info);
+			this.globeManager.callback_MouseDrag = @(info)this.tool_function_pencil('replace',info);
+			this.globeManager.callback_MouseLift = @(info)this.tool_function_pencil('finish', info);
+			% Internal
+			this.tool_callback_confirm   = @()this.tool_function_pencil('confirm',[]);
+			this.tool_callback_reject    = @()this.tool_function_pencil('reject', []);
+			this.tool_callback_localUndo = @()this.tool_function_pencil('undo',   []);
+			
+			% Prepare the working data
+			this.toolLiveData = struct(...
+				'refNodes',nan(0,3)...
+			);
 			
 			% Mark this tool as active
 			this.activeTool = 'pencil';
@@ -303,6 +321,72 @@ classdef MapEditor < handle
 			
 			% Record the new lack of tool
 			this.activeTool = 'none';
+			% Record that we're not actively in a live tool
+			this.toolLiveData = struct();
+			this.toolIsLive = false;
+			
+			% Restore the callbacks
+			% External
+			this.globeManager.callback_MouseDown = @(~)[];
+			this.globeManager.callback_MouseMove = @(~)[];
+			this.globeManager.callback_MouseDrag = @(~)[];
+			this.globeManager.callback_MouseLift = @(~)[];
+			% Internal
+			this.tool_callback_confirm   = @()[];
+			this.tool_callback_reject    = @()[];
+			this.tool_callback_localUndo = @()[];
+			
+		end
+% 		% 
+% 		function tool_cleanupLight(this)
+% 			
+% 		end
+		
+		% Pencil tool functionality
+		function tool_function_pencil(this,mode,info)
+			
+			% Holding ALT when dragging will place many reference nodes
+			if strcmp(mode,'replace') && ismember('alt',info.mod_last)
+				mode = 'fresh'; % This already has all the behavior we need
+			end
+			
+			switch mode
+				case 'fresh' % Fresh click. Try starting anew, or just appending a new reference node.
+					
+					% If the user didn't click directly on the globe,
+					% discard the click.
+					if ~info.wasDirect_last
+						return
+					end
+					
+					% If we're not currently live, start anew. Record this
+					% reference node twice, so we can modify the second
+					% entry after (with a drag) without removing the
+					% original
+					if ~this.toolIsLive
+						this.toolIsLive = true;
+						this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
+					else % Otherwise, add this point to the reference nodes
+						this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
+					end
+					
+				case 'trial'
+					
+return % for now
+					
+				case 'replace' % Drag portion of click-and-drag. Just update the last reference node to match
+					
+					this.toolLiveData.refNodes(end,:) = info.xyz_last;
+					
+				case 'finish' % Click release. 
+					
+% Nothing to do yet
+					
+			end
+			
+			% If we're still running, something was updated, so update the
+			% shown plot
+			updatePlotMatrix(this.plot_,slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad));
 			
 		end
 	end
@@ -315,6 +399,9 @@ classdef MapEditor < handle
 		globeAx;
 		
 		toolButtons = struct();
+		generalButtons = struct();
+		
+		backgroundSphereRadius = 0.999;
 		
 		sphereMeshPatch;
 	end
@@ -322,6 +409,12 @@ classdef MapEditor < handle
 		% Creates all necessary graphics
 		function createGraphics(this)
 			
+			% Ensure that any plot3 lines drawn on the map have this
+			% maximum angular spacing, to ensure they never interpolate
+			% underneath the background map components.
+			this.maxAngleStep_rad = 2*acos(this.backgroundSphereRadius);
+			
+			% Make the figure
 			this.fig = figure(...
 				'Position',this.settings.figurePosition,...
 				'Color',this.palette.space,...
@@ -366,8 +459,27 @@ classdef MapEditor < handle
 				);
 			end
 			
+			% Create the helper buttons (confirm, reject)
+			this.generalButtons.confirm = uicontrol(...
+					'Style','pushbutton',...
+					'String','',...
+					'Position',[horzSpacing,startHeight(toolInd),width,height],...
+					'Tooltip','Confirm Changes [ENTER]',...
+					'Callback',@(~,~) this.tool_callback_confirm(),...
+					'BackgroundColor',this.palette.uiBackground,...
+					'Parent',this.fig...
+			);
+			this.setupImageButton(...
+				this.generalButtons.confirm,...
+				'green_check.png');
+			
+			
+this.plot_ = plot(nan,nan,'Color',[0,0,0],'LineWidth',2);
+
 [points,faces,~,~] = IrregularSpherePoints(3e4);
-this.sphereMeshPatch = patch('Vertices',points,'Faces',faces,...
+this.sphereMeshPatch = patch(...
+	'Vertices',points*this.backgroundSphereRadius,...
+	'Faces',faces,...
 	'FaceColor','w',...
 	'EdgeColor','none',...
 	'SpecularStrength',0.5);
@@ -407,6 +519,11 @@ for ind = 1:numel(mapData)
 end
 			
 		end
+		% Sets up the provided uicontrol button with the specified image
+		% file. imPath is relative to the GUI Assets folder.
+		function setupImageButton(this,uic,imPath)
+			
+		end
 	end
 	
 	
@@ -417,6 +534,19 @@ end
 		% When loading a file from file, set the lastSaveDatenum to now()
 	end
 	
+	
+	% * * * * * * * * * * * * * * TEMPORARY * * * * * * * * * * * * * * * *
+	properties (Access = public)
+		plot_;
+		dataStack = [];
+		maxAngleStep_rad = 0.02;
+	end
+	methods (Access = public)
+		function stop(this)
+			this.toolIsLive = false;
+			this.toolLiveData.refNodes = nan(0,3);
+		end
+	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *
 	% make land masses
@@ -432,13 +562,21 @@ end
 	% Custom cursors for each tool
 	% button to reset camera view when things get weird.
 	% Checkbox for 'lock selection'
-	% copy paste???
+	% copy paste??? What sort of functionality does matlab support in
+	% interfacing with the clipboard?
 	
 	% autosave: doAutosave, autosavePeriod_s
 	% populate autosave
 	% Checkbox for whether to allow globe tilt/roll
 	% retain settings between sessions. update set.settings()
 	% modify settings.figurePosition and object placement on figure resize
+	% option to snap to nearby points. Prevent snapping to invalid points,
+	% such as the previous point in a line.
+	
+	% When that special behavior triggers inside GlobeManager>renormalizeCameraSettings()   
+	% then perform an animation to rotate the camera into place over 0.5 or
+	% 1.0 sec.
+	
 	
 	% export maps renders
 		% final destination: flat (no 1/sin() scaling on border widths)   
