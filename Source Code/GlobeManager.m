@@ -19,15 +19,18 @@ classdef GlobeManager < handle
 		% Temporary
 		eventState; % struct, see resetEventState()
 		isSustained = false;
+		remainingSpin_deg = 0; % Used to spin the up vector to correct orientation over time.
+		blindlyRejectEvents = false; % Whether we're spinning the up vector currently
 		
 	end
 	properties (SetAccess = public)
 		
 		% External Callbacks
-		callback_MouseDown function_handle = @(info) [];
-		callback_MouseMove function_handle = @(info) [];
-		callback_MouseDrag function_handle = @(info) [];
-		callback_MouseLift function_handle = @(info) [];
+		callback_MouseDown  function_handle = @(info) [];
+		callback_MouseMove  function_handle = @(info) [];
+		callback_MouseDrag  function_handle = @(info) [];
+		callback_MouseLift  function_handle = @(info) [];
+		callback_ZoomChange function_handle = @(zoomAmount) [];
 		
 		% When true, the custom click/drag callbacks are overridden and the
 		% free-pan is enabled
@@ -103,12 +106,24 @@ classdef GlobeManager < handle
 			this.isSustained = false;
 		end
 		
+		% Returns the current zoomAmount
+		function zoomAmount = getZoomAmount(this)
+			zoomAmount = this.zoomAmount;
+		end
+		
 	end
 	
 	methods (Access = private)
 		
 		% Figure level click callback
 		function clickCallback(this,mode)
+			
+			% If we're spinning the camera to correct the orientation, this
+			% will trigger, so we should not run any processing on mouse
+			% events right now
+			if this.blindlyRejectEvents
+				return
+			end
 			
 			% Determine the mode of operation
 			isMouseDown = strcmp(mode,'MouseDown');
@@ -294,7 +309,9 @@ classdef GlobeManager < handle
 					% slightly towards wherever the user's cursor is.
 					this.panHelper(zoomRefPos,this.lookAtPos,1-this.zoomRate^(2*zoomSign));
 					% Update camera settings
-					this.updateView()
+					this.updateView();
+					% Call the callback for updating zoom
+					this.callback_ZoomChange(this.zoomAmount);
 				end
 				
 			else % no control pressed, just pan
@@ -438,7 +455,11 @@ classdef GlobeManager < handle
 		% To avoid any weird behavior, renormalize the lookAtPos and
 		% lookUpVector. forceOrientation is optional: when true, it will
 		% ensure the camera is oriented correctly.
-		function renormalizeCameraSettings(this,forceOrientation)
+		function doFlip = renormalizeCameraSettings(this,forceOrientation)
+			
+			% Default to no flipping needed
+			doFlip = false;
+			
 			% Normalize the look at position
 			this.lookAtPos = this.lookAtPos / norm(this.lookAtPos);
 			
@@ -466,9 +487,7 @@ classdef GlobeManager < handle
 			if exist('forceOrientation','var') && forceOrientation % exists and is true
 				% If the lookUpVector and +z are in different directions,
 				% flip the up vector.
-				if dot(z,this.lookUpVector) < -sqrt(eps)
-					this.lookUpVector = -this.lookUpVector;
-				end
+				doFlip = dot(z,this.lookUpVector) < -sqrt(eps);
 			end
 			
 			% Check some extreme failure cases
@@ -479,19 +498,56 @@ classdef GlobeManager < handle
 				this.lookUpVector = [0;0;1];
 			end
 		end
-		% Update the orientation of the camera. ARguments, if any, get
+		% Update the orientation of the camera. Arguments, if any, get
 		% passed to renormalizeCameraSettings.
 		function updateView(this,varargin)
 			
-			% Prevent some wonky behavior...
-			this.renormalizeCameraSettings(varargin{:});
+			% Prevent some wonky behavior... Determine if we need to flip
+			% the up vector
+			doFlip = this.renormalizeCameraSettings(varargin{:});
 			
-			% Update the camera settings
-			this.ax.CameraPosition = this.lookAtPos'*(1+this.zoomAmount);
-			this.ax.CameraTarget   = this.lookAtPos';
-			this.ax.CameraUpVector = this.lookUpVector';
+			% Apply static stuff
 			this.ax.CameraViewAngle = 10;
 % Hard coded value...
+			this.ax.CameraPosition = this.lookAtPos'*(1+this.zoomAmount);
+			this.ax.CameraTarget   = this.lookAtPos';
+			
+			% Update the up vector settings
+			if doFlip % Uncommon behavior
+				maxFPS_Hz = 60;
+				maxTime_s = 0.7;
+				this.remainingSpin_deg = 180;
+				this.blindlyRejectEvents = true;
+				RepeatedTaskPerformer(1/maxFPS_Hz,maxTime_s,...
+					@(elapsedTime_s) this.spinUpVector(elapsedTime_s,maxTime_s));
+			else % Normal behavior
+				this.ax.CameraUpVector = this.lookUpVector';
+			end
+			
+		end
+		% Asynchronously spins the lookUpVector 180 degrees over a short
+		% period of time Does not change the value of this.lookUpVector,
+		% just what the camera shows. This function gets called exactly
+		% once after the time runs out
+		function spinUpVector(this,elapsedTime_s,maxTime_s)
+			elapsedSpinProportion = clamp(elapsedTime_s/maxTime_s,0,1);
+			previousSpinProportion = (180-this.remainingSpin_deg) / 180;
+			deltaSpin_deg = 180 * (elapsedSpinProportion - previousSpinProportion);
+			
+			% Rotate about the forward vector
+			R = rotx(deltaSpin_deg);
+			R_ = this.localToGlobalTransform(R);
+			this.lookUpVector = R_ * this.lookUpVector;
+			% Directly update the camera
+			this.ax.CameraUpVector = this.lookUpVector';
+			
+			% Bookkeeping to make sure we don't spin too far.
+			this.remainingSpin_deg = clamp(this.remainingSpin_deg - deltaSpin_deg,0,180);
+			
+			% If we've finished, stop rejecting mouse events.
+			if this.remainingSpin_deg == 0
+				this.blindlyRejectEvents = false;
+			end
 			
 		end
 		

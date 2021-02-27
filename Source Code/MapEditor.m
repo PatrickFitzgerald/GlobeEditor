@@ -21,6 +21,14 @@ classdef MapEditor < handle
 			% Create the graphics for the editor
 			this.createGraphics();
 			
+			% Prepare the callbacks
+			this.globeManager.callback_MouseDown  = @(info)this.toolCallback('mousedown',info);
+			this.globeManager.callback_MouseMove  = @(info)this.toolCallback('mousemove',info);
+			this.globeManager.callback_MouseDrag  = @(info)this.toolCallback('mousedrag',info);
+			this.globeManager.callback_MouseLift  = @(info)this.toolCallback('mouselift',info);
+			this.globeManager.callback_ZoomChange = @(zoomAmount)this.updateZoomAmount(zoomAmount);
+			% The internal callbacks are populated by keyPressCallback()
+			
 			% Enable the default tool
 			this.tool_enable_pan();
 			
@@ -61,20 +69,22 @@ classdef MapEditor < handle
 	% * * * * * * * * * * * SETTINGS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		sizes = struct(...
-			'toolButtonHeight',  30,...
-			'toolButtonWidth',   50,...
+			'toolButtonSize',    64,...
 			'toolButtonVSpacing',10,...
-			'toolButtonHSpacing',10 ...
+			'toolButtonHSpacing',10,...
+			'pointHighlightRadius',0.001 ...
 		);
 		palette = struct(...
 			'space',[1,1,1]*0.1,...
-			'uiBackground',[1,1,1]*0.2 ...
+			'uiBackground',[1,1,1]*0.2,...
+			'buttonBackground',[1,1,1]*0.3 ...
 		);
 		settings = struct(... % UPDATE set.settings() and loadSettings() TO MATCH
 			'figurePosition',[100,100,1200,900],...
 			'doAutosave',true,...
 			'autosavePeriod_s',300,...
-			'lockCameraOrientation',true...
+			'lockCameraOrientation',true,...
+			'numUndoRedoWhenShifted',10 ...
 		);
 	end
 	methods (Access = private)
@@ -122,10 +132,11 @@ classdef MapEditor < handle
 			% These checks aren't going to be exhaustive...
 			isScalarBool = @(v) isscalar(v) && (isa(v,'logical') || ismember(v,[0,1]));
 			checks = {
-				'figurePosition',        @(v) isnumeric(v) && isvector(v) && numel(v)==4 && all(imag(v)==0) && all(v(3:4)>0);
-				'doAutosave',            @(v) isScalarBool(v);
-				'autosavePeriod_s',      @(v) isnumeric(v) && isscalar(v) && imag(v)==0 && v>0;
-				'lockCameraOrientation', @(v) isScalarBool(v);
+				'figurePosition',         @(v) isnumeric(v) && isvector(v) && numel(v)==4 && all(imag(v)==0) && all(v(3:4)>0); % valid position 4-vector
+				'doAutosave',             @(v) isScalarBool(v); % scalar bool
+				'autosavePeriod_s',       @(v) isnumeric(v) && isscalar(v) && imag(v)==0 && v>0; % positive real scalar
+				'lockCameraOrientation',  @(v) isScalarBool(v); % scalar bool
+				'numUndoRedoWhenShifted', @(v) isnumeric(v) && isscalar(v) && imag(v)==0 && v>0 && floor(v)==v; % positive real scalar integer
 			};
 			% Loop over each expected field. All we know right now is that
 			% settingsL is a struct.
@@ -213,6 +224,10 @@ classdef MapEditor < handle
 				% Update this setting in the globe manager
 				this.globeManager.preventCameraTilt = this.settings.lockCameraOrientation; %#ok<MCSUP>
 			end
+			if ismember('numUndoRedoWhenShifted',changedFields)
+				% Nothing needs updating, this is actively checked whenever
+				% it's used.
+			end
 			
 		end
 	end
@@ -223,17 +238,14 @@ classdef MapEditor < handle
 		activeTool   = 'none';
 		toolLiveData = struct();
 		toolIsLive   = false;
-		
-		tool_callback_confirm   = @() [];
-		tool_callback_reject    = @() [];
-		tool_callback_localUndo = @() [];
+		toolCallback = @(varargin) [];
 	end
 	methods (Access = private)
 		% Enable select tool
 		function tool_enable_select(this)
 			
 			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup();
+			this.tool_cleanup_heavy();
 			
 			% Mark this tool as active
 			this.activeTool = 'select';
@@ -243,7 +255,7 @@ classdef MapEditor < handle
 		function tool_enable_pan(this)
 			
 			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup();
+			this.tool_cleanup_heavy();
 			
 			% Enable the pan feature on the GlobeManager
 			this.globeManager.clickPanEnabled = true;
@@ -256,33 +268,22 @@ classdef MapEditor < handle
 		function tool_enable_pencil(this)
 			
 			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup();
+			this.tool_cleanup_heavy();
 			
-			% Assign the pertinent callbacks
-			% External
-			this.globeManager.callback_MouseDown = @(info)this.tool_function_pencil('fresh',  info);
-			this.globeManager.callback_MouseMove = @(info)this.tool_function_pencil('trial',  info);
-			this.globeManager.callback_MouseDrag = @(info)this.tool_function_pencil('replace',info);
-			this.globeManager.callback_MouseLift = @(info)this.tool_function_pencil('finish', info);
-			% Internal
-			this.tool_callback_confirm   = @()this.tool_function_pencil('confirm',[]);
-			this.tool_callback_reject    = @()this.tool_function_pencil('reject', []);
-			this.tool_callback_localUndo = @()this.tool_function_pencil('undo',   []);
-			
-			% Prepare the working data
-			this.toolLiveData = struct(...
-				'refNodes',nan(0,3)...
-			);
+			% Assign the callback manager
+			this.toolCallback = @(varargin) this.tool_function_pencil(varargin{:});
 			
 			% Mark this tool as active
 			this.activeTool = 'pencil';
+			% Prepare the working data's initial state
+			this.tool_cleanup_light(); % call after assigning activeTool
 			
 		end
 		% Enable drag tool
 		function tool_enable_drag(this)
 			
 			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup();
+			this.tool_cleanup_heavy();
 			
 			% Mark this tool as active
 			this.activeTool = 'drag';
@@ -292,14 +293,14 @@ classdef MapEditor < handle
 		function tool_enable_stretch(this)
 			
 			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup();
+			this.tool_cleanup_heavy();
 			
 			% Mark this tool as active
 			this.activeTool = 'stretch';
 			
 		end
 		% Cleanup current tool
-		function tool_cleanup(this)
+		function tool_cleanup_heavy(this)
 			
 			% Reset the event state of the GlobeManager to prevent stale
 			% events from continuing
@@ -325,33 +326,94 @@ classdef MapEditor < handle
 			this.toolLiveData = struct();
 			this.toolIsLive = false;
 			
-			% Restore the callbacks
-			% External
-			this.globeManager.callback_MouseDown = @(~)[];
-			this.globeManager.callback_MouseMove = @(~)[];
-			this.globeManager.callback_MouseDrag = @(~)[];
-			this.globeManager.callback_MouseLift = @(~)[];
-			% Internal
-			this.tool_callback_confirm   = @()[];
-			this.tool_callback_reject    = @()[];
-			this.tool_callback_localUndo = @()[];
+			% Disconnect the callback manager
+			this.toolCallback = @(varargin) [];
 			
 		end
-% 		% 
-% 		function tool_cleanupLight(this)
-% 			
-% 		end
-		
-		% Pencil tool functionality
-		function tool_function_pencil(this,mode,info)
+		% Overwrites existing toolLiveData to match a clean slate,
+		% specialized to that currently active tool.
+		function tool_cleanup_light(this)
 			
-			% Holding ALT when dragging will place many reference nodes
-			if strcmp(mode,'replace') && ismember('alt',info.mod_last)
-				mode = 'fresh'; % This already has all the behavior we need
+			% Mark as not live
+			this.toolIsLive = false;
+			
+			% Apply custom light cleaning/reset for the specific tool
+			switch this.activeTool
+				case 'select'
+					
+				case 'pan'
+					
+				case 'pencil'
+					this.toolLiveData = struct(...
+						'refNodes',nan(0,3),...
+						'undoData',nan(0,3)...
+					);
+				case 'drag'
+					
+				case 'stretch'
+					
+				case 'none'
+					% Nothing to do here.
+				otherwise
+					error('Invalid tool')
 			end
 			
+			% Revert some temporary plotting items to their default state
+			this.highlight1.centerPoints = nan(0,3);
+			this.highlight2.centerPoints = nan(0,3);
+			
+		end
+		
+		% Pencil tool functionality
+		function tool_function_pencil(this,mode,varargin)
+			
+			% Double check what variables to expect
+			if ismember(mode,{'confirm','reject'})
+				% No extra varargin
+			elseif ismember(mode,{'redo','undo'})
+				% Number to undo is stored in varargin{1}
+				numNodesToUndo = varargin{1};
+			elseif ismember(mode,{'mousedown','mousemove','mousedrag','mouselift'})
+				% varargin{1} stores the 'info' struct from the
+				% GlobeManager about where the mouse event happened on the
+				% globe.
+				info = varargin{1};
+				% Perform some preprocessing, now that we know info exists.
+				% Holding ALT when dragging will place many reference nodes
+				if strcmp(mode,'mousedrag') && ismember('alt',info.mod_last)
+					mode = 'mousedown'; % This already has all the behavior we need
+				end
+			end
+			
+			% Check all cases:
 			switch mode
-				case 'fresh' % Fresh click. Try starting anew, or just appending a new reference node.
+				case 'confirm'
+					
+disp(this.toolLiveData.refNodes)
+					% Set to not-live, and wipe the storage
+					this.tool_cleanup_light();
+					
+				case 'reject'
+					
+					% Set to not-live, and wipe the storage without saving
+					this.tool_cleanup_light();
+					
+				case 'undo'
+					
+					% Make a copy of what we're removing
+					this.toolLiveData.undoData = [this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:);this.toolLiveData.undoData];
+					% And remove it from the refNodes
+					this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1),:) = [];
+					
+				case 'redo'
+					
+					% Grab content from the undoData
+					this.toolLiveData.refNodes = [this.toolLiveData.refNodes;this.toolLiveData.undoData(1:min(numNodesToUndo,end),:)];
+					% Now remove that from the undoData, so it's not
+					% duplicated
+					this.toolLiveData.undoData(1:min(numNodesToUndo,end),:) = [];
+					
+				case 'mousedown' % Fresh click. Try starting anew, or just appending a new reference node.
 					
 					% If the user didn't click directly on the globe,
 					% discard the click.
@@ -368,17 +430,25 @@ classdef MapEditor < handle
 						this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
 					else % Otherwise, add this point to the reference nodes
 						this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
+						% To avoid some funky behavior that manifests with
+						% my double-assignment in the other IF section,
+						% check for duplicates which should have been
+						% removed. Remove them if not. This happens if you
+						% click twice without dragging.
+						if size(this.toolLiveData.refNodes,1) == 3 && isequal(this.toolLiveData.refNodes(1,:),this.toolLiveData.refNodes(2,:))
+							this.toolLiveData.refNodes(1,:) = [];
+						end
 					end
 					
-				case 'trial'
+				case 'mousemove'
 					
 return % for now
 					
-				case 'replace' % Drag portion of click-and-drag. Just update the last reference node to match
+				case 'mousedrag' % Drag portion of click-and-drag. Just update the last reference node to match
 					
 					this.toolLiveData.refNodes(end,:) = info.xyz_last;
 					
-				case 'finish' % Click release. 
+				case 'mouselift' % Click release. 
 					
 % Nothing to do yet
 					
@@ -386,7 +456,26 @@ return % for now
 			
 			% If we're still running, something was updated, so update the
 			% shown plot
-			updatePlotMatrix(this.plot_,slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad));
+			switch size(this.toolLiveData.refNodes,1)
+				case 0
+					% No line to show
+					slerpedData = nan(0,3);
+					% Show no highlighted points
+					this.highlight1.centerPoints = nan(0,3);
+					this.highlight2.centerPoints = nan(0,3);
+				case 1
+					% No line to show
+					slerpedData = nan(0,3);
+					% Highlight the start point
+					this.highlight1.centerPoints = this.toolLiveData.refNodes(1,:);
+					this.highlight2.centerPoints = nan(0,3);
+				otherwise % at least 2
+					% Generate a slerped path
+					slerpedData = slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad);
+					this.highlight1.centerPoints = this.toolLiveData.refNodes(end-1,:);
+					this.highlight2.centerPoints = this.toolLiveData.refNodes(end-0,:);
+			end
+			updatePlotMatrix(this.plot_,slerpedData);
 			
 		end
 	end
@@ -400,6 +489,8 @@ return % for now
 		
 		toolButtons = struct();
 		generalButtons = struct();
+		highlight1;
+		highlight2;
 		
 		backgroundSphereRadius = 0.999;
 		
@@ -421,7 +512,8 @@ return % for now
 				'DockControls','off',...
 				'MenuBar','none',...
 				'Name','Map Editor',...
-				'NumberTitle','off');
+				'NumberTitle','off',...
+				'WindowKeyPressFcn',@(o,e)this.keyPressCallback(o,e));
 			
 			% On that figure, create a set of axes with convenient
 			% callbacks and state management.
@@ -441,8 +533,8 @@ return % for now
 				'stretch',   'Stretch and shrink features', @(~,~)this.tool_enable_stretch();
 			};
 			numTools = size(toolOptions,1);
-			width  = this.sizes.toolButtonWidth;
-			height = this.sizes.toolButtonHeight;
+			width  = this.sizes.toolButtonSize;
+			height = this.sizes.toolButtonSize;
 			vertSpacing = this.sizes.toolButtonVSpacing;
 			horzSpacing = this.sizes.toolButtonHSpacing;
 			startHeight = vertSpacing + flip(0:numTools-1) * (height+vertSpacing);
@@ -454,24 +546,50 @@ return % for now
 					'Position',[horzSpacing,startHeight(toolInd),width,height],...
 					'Tooltip',toolOptions{toolInd,2},...
 					'Callback',toolOptions{toolInd,3},...
-					'BackgroundColor',this.palette.uiBackground,...
+					'BackgroundColor',this.palette.buttonBackground,...
 					'Parent',this.fig...
 				);
 			end
 			
-			% Create the helper buttons (confirm, reject)
-			this.generalButtons.confirm = uicontrol(...
+			buttonOptions = {
+			%    field name   tooltip                  callback  coords  image path    
+				'confirm', 'Confirm Changes [ENTER]', 'confirm', [1,1], 'green_check.png';
+				'reject',  'Reject Changes [ESCAPE]', 'reject',  [1,2], 'red_x.png';
+				'undo',    'Undo [CTRL+Z]',           'undo',    [2,1], 'blue_circle.png';
+				'redo',    'Redo [CTRL+Y]',           'redo',    [2,2], 'orange_circle.png';
+			};
+			figHeight = this.fig.Position(4);
+topLeftPanel = uipanel(...
+				'Parent',this.fig,...
+				'BackgroundColor',this.palette.uiBackground,...
+				'BorderType','none',...
+				'Units','pixels',...
+				'Position',[0,figHeight,0,0]+[0,-1,1,1]*(width*2+horzSpacing*3));
+			for btnInd = 1:size(buttonOptions,1)
+				coords = buttonOptions{btnInd,4};
+				startHeight = (height+vertSpacing)*coords(1) - height;
+				startWidth  = (width +horzSpacing)*coords(2) - width;
+				% Create the helper buttons (confirm, reject, undo, redo)
+				this.generalButtons.(buttonOptions{btnInd,1}) = uicontrol(...
 					'Style','pushbutton',...
 					'String','',...
-					'Position',[horzSpacing,startHeight(toolInd),width,height],...
-					'Tooltip','Confirm Changes [ENTER]',...
-					'Callback',@(~,~) this.tool_callback_confirm(),...
-					'BackgroundColor',this.palette.uiBackground,...
-					'Parent',this.fig...
-			);
-			this.setupImageButton(...
-				this.generalButtons.confirm,...
-				'green_check.png');
+					'Units','pixels',...
+					'Position',[startWidth,startHeight,width,height],...
+					'Tooltip',buttonOptions{btnInd,2},...
+					'Callback',@(~,~) this.toolCallback(buttonOptions{btnInd,3}),...
+					'BackgroundColor',this.palette.buttonBackground,...
+					'Parent',topLeftPanel...
+				);
+				this.setupImageButton(...
+					this.generalButtons.(buttonOptions{btnInd,1}),...
+					buttonOptions{btnInd,5});
+			end
+			
+			this.highlight1 = HighlightPoints(this.globeAx);
+			this.highlight2 = HighlightPoints(this.globeAx);
+% this.highlight1.color = [...];
+% this.highlight2.color = [...];
+			this.updateZoomAmount(); % updates highlightX.radius
 			
 			
 this.plot_ = plot(nan,nan,'Color',[0,0,0],'LineWidth',2);
@@ -522,6 +640,58 @@ end
 		% Sets up the provided uicontrol button with the specified image
 		% file. imPath is relative to the GUI Assets folder.
 		function setupImageButton(this,uic,imPath)
+			[im,~,tr] = imread(fullfile(this.getInstallDir(),'GUI Assets',imPath));
+			bgColor = permute(uic.BackgroundColor,[1,3,2]);
+			im = double(im)/255;
+			tr = double(tr)/255;
+			im_ = im .* tr + (1-tr).*bgColor;
+			finalSize = uic.Position(3:4);
+			uic.CData = clamp(imresize(im_,finalSize+4),0,1);
+		end
+		% The callback for keypresses
+		function keyPressCallback(this,~,event)
+			
+			% ENTER = confirm local changes
+			% ESCAPE = reject local changes
+			% CTRL+Z = undo 1 local action
+			% CTRL+Y = redo 1 local action
+			% CTRL+SHIFT+Z = undo many local actions
+			% CTRL+SHIFT+Y = redo many local actions
+			if ismember('shift',event.Modifier)
+				undoRedoNum = this.settings.numUndoRedoWhenShifted;
+			else
+				undoRedoNum = 1;
+			end
+			
+			if strcmp(event.Key,'return') % CONFIRM
+				warning('Add qualifiers on when these keypress actions occur');
+				this.toolCallback('confirm');
+			elseif strcmp(event.Key,'z') && ismember('control',event.Modifier) % UNDO
+				warning('Add qualifiers on when these keypress actions occur')
+				this.toolCallback('undo',undoRedoNum);
+			elseif strcmp(event.Key,'y') && ismember('control',event.Modifier) % REDO
+				warning('Add qualifiers on when these keypress actions occur')
+				this.toolCallback('redo',undoRedoNum);
+			elseif strcmp(event.Key,'escape')
+				warning('Add qualifiers on when these keypress actions occur')
+				this.toolCallback('reject');
+			end
+			
+		end
+% separate undo/redo callback. manage between global/local callback.
+% determine how many nodes to undo at once
+		% Updates things tied to the zoom level of the GlobeManager.
+		% Argument is optional
+		function updateZoomAmount(this,zoomAmount)
+			
+			% Handle the optional input
+			if ~exist('zoomAmount','var')
+				zoomAmount = this.globeManager.getZoomAmount();
+			end
+			
+			% Update items which depend on the zoom amount.
+			this.highlight1.radius = this.sizes.pointHighlightRadius * zoomAmount;
+			this.highlight2.radius = this.sizes.pointHighlightRadius * zoomAmount;
 			
 		end
 	end
@@ -577,6 +747,16 @@ end
 	% then perform an animation to rotate the camera into place over 0.5 or
 	% 1.0 sec.
 	
+	% While in the pencil mode (and likely others) these are the controls
+		% CLICK = place point
+		% CLICKDRAG = dynamically update the current point
+		% CLICKDRAG+ALT = place points as quickly as the graphics update
+		% ENTER = confirm local changes
+		% ESCAPE = reject local changes
+		% CTRL+Z = undo 1 local action
+		% CTRL+Y = redo 1 local action
+		% CTRL+SHIFT+Z = undo many local actions
+		% CTRL+SHIFT+Y = redo many local actions
 	
 	% export maps renders
 		% final destination: flat (no 1/sin() scaling on border widths)   
