@@ -69,15 +69,17 @@ classdef MapEditor < handle
 	% * * * * * * * * * * * SETTINGS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		sizes = struct(...
-			'toolButtonSize',    64,...
-			'toolButtonVSpacing',10,...
-			'toolButtonHSpacing',10,...
-			'pointHighlightRadius',0.001 ...
+			'toolButtonSize',   45,...
+			'toolButtonPadding',10,...
+			'pointHighlightRadius',0.0012,...
+			'buttonBorderThickness',4 ... % keep it a multiple of 2
 		);
 		palette = struct(...
 			'space',[1,1,1]*0.1,...
 			'uiBackground',[1,1,1]*0.2,...
-			'buttonBackground',[1,1,1]*0.3 ...
+			'buttonBackground', [1,1,1]*0.45,...
+			'buttonBevelBright',[1,1,1]*0.45*1.3,...
+			'buttonBevelDark',  [1,1,1]*0.45/1.3 ...
 		);
 		settings = struct(... % UPDATE set.settings() and loadSettings() TO MATCH
 			'figurePosition',[100,100,1200,900],...
@@ -403,7 +405,7 @@ disp(this.toolLiveData.refNodes)
 					% Make a copy of what we're removing
 					this.toolLiveData.undoData = [this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:);this.toolLiveData.undoData];
 					% And remove it from the refNodes
-					this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1),:) = [];
+					this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:) = [];
 					
 				case 'redo'
 					
@@ -420,6 +422,10 @@ disp(this.toolLiveData.refNodes)
 					if ~info.wasDirect_last
 						return
 					end
+					
+					% If we're still running, then we're adding at least
+					% one point. Discard the undo data
+					this.toolLiveData.undoData = nan(0,3);
 					
 					% If we're not currently live, start anew. Record this
 					% reference node twice, so we can modify the second
@@ -448,6 +454,10 @@ return % for now
 					
 					this.toolLiveData.refNodes(end,:) = info.xyz_last;
 					
+					% If we're still running, then we're adding at least
+					% one point. Discard the undo data
+					this.toolLiveData.undoData = nan(0,3);
+					
 				case 'mouselift' % Click release. 
 					
 % Nothing to do yet
@@ -456,24 +466,19 @@ return % for now
 			
 			% If we're still running, something was updated, so update the
 			% shown plot
-			switch size(this.toolLiveData.refNodes,1)
-				case 0
-					% No line to show
-					slerpedData = nan(0,3);
-					% Show no highlighted points
-					this.highlight1.centerPoints = nan(0,3);
-					this.highlight2.centerPoints = nan(0,3);
-				case 1
-					% No line to show
-					slerpedData = nan(0,3);
-					% Highlight the start point
-					this.highlight1.centerPoints = this.toolLiveData.refNodes(1,:);
-					this.highlight2.centerPoints = nan(0,3);
-				otherwise % at least 2
-					% Generate a slerped path
-					slerpedData = slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad);
-					this.highlight1.centerPoints = this.toolLiveData.refNodes(end-1,:);
-					this.highlight2.centerPoints = this.toolLiveData.refNodes(end-0,:);
+			numNodes = size(this.toolLiveData.refNodes,1);
+			if numNodes < 2 % Too few to interpolate
+				% No line to show
+				slerpedData = nan(0,3);
+			else % Enough to interpolate
+				slerpedData = slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad);
+			end
+			
+			if numNodes == 0 % No points
+				this.highlight1.centerPoints = nan(0,3);
+			else % At least one point
+				% Show the last point
+				this.highlight1.centerPoints = this.toolLiveData.refNodes(end,:);
 			end
 			updatePlotMatrix(this.plot_,slerpedData);
 			
@@ -486,6 +491,9 @@ return % for now
 		fig;
 		globeManager;
 		globeAx;
+		
+		topLeftPanel;
+		bottomLeftPanel;
 		
 		toolButtons = struct();
 		generalButtons = struct();
@@ -505,7 +513,7 @@ return % for now
 			% underneath the background map components.
 			this.maxAngleStep_rad = 2*acos(this.backgroundSphereRadius);
 			
-			% Make the figure
+			% Make the figure. Make it invisible to start.
 			this.fig = figure(...
 				'Position',this.settings.figurePosition,...
 				'Color',this.palette.space,...
@@ -513,7 +521,9 @@ return % for now
 				'MenuBar','none',...
 				'Name','Map Editor',...
 				'NumberTitle','off',...
-				'WindowKeyPressFcn',@(o,e)this.keyPressCallback(o,e));
+				'WindowKeyPressFcn',@(o,e)this.keyPressCallback(o,e),...
+				'SizeChangedFcn',@(~,~)this.figureResizeFunc(),...
+				'Visible','off');
 			
 			% On that figure, create a set of axes with convenient
 			% callbacks and state management.
@@ -523,6 +533,9 @@ return % for now
 			% Get the underlying axes so we can plot to it.
 			this.globeAx = this.globeManager.getAxesHandle();
 			% These axes are designed for 3D plotting on the unit sphere.
+			
+			this.globeAx.Units = 'pixels';
+			this.globeAx.Position = [1,1,100,100]; % Will be updated in figureResizeFunc()
 			
 			toolOptions = {...
 			%    field name   tooltip                       callback
@@ -535,19 +548,36 @@ return % for now
 			numTools = size(toolOptions,1);
 			width  = this.sizes.toolButtonSize;
 			height = this.sizes.toolButtonSize;
-			vertSpacing = this.sizes.toolButtonVSpacing;
-			horzSpacing = this.sizes.toolButtonHSpacing;
+			vertSpacing = this.sizes.toolButtonPadding;
+			horzSpacing = this.sizes.toolButtonPadding;
 			startHeight = vertSpacing + flip(0:numTools-1) * (height+vertSpacing);
+			borderThickness = this.sizes.buttonBorderThickness;
+			buttonBevelBright = this.palette.buttonBevelBright;
+			buttonBevelDark   = this.palette.buttonBevelDark;
 			
+% 			uic = 
+% 				'Style','pushbutton',...
+% 				'Position',[100,100,width,height],...
+% 				'Callback','disp(''clicked'')',...
+% 				'CData',ones(height-borderThickness,width-borderThickness,3)*baseBrightness ...
+% 			);
+			
+			this.bottomLeftPanel = uipanel(...
+				'Parent',this.fig,...
+				'BackgroundColor',this.palette.uiBackground,...
+				'BorderType','none',...
+				'Units','pixels',...
+				'Position',[0,0,width+2*horzSpacing,numTools*(height+vertSpacing)+horzSpacing]); % Absolute placement will be updated in figureResizeFunc();
 			for toolInd = 1:numTools
-				this.toolButtons.(toolOptions{toolInd,1}) = uicontrol(...
+				this.toolButtons.(toolOptions{toolInd,1}) = BetterButton(...
+					buttonBevelBright,buttonBevelDark,borderThickness,...
 					'Style','pushbutton',...
 					'String','',...
-					'Position',[horzSpacing,startHeight(toolInd),width,height],...
+					'Position',[horzSpacing+1,startHeight(toolInd)+1,width,height],...
 					'Tooltip',toolOptions{toolInd,2},...
 					'Callback',toolOptions{toolInd,3},...
 					'BackgroundColor',this.palette.buttonBackground,...
-					'Parent',this.fig...
+					'Parent',this.bottomLeftPanel...
 				);
 			end
 			
@@ -558,27 +588,27 @@ return % for now
 				'undo',    'Undo [CTRL+Z]',           'undo',    [2,1], 'blue_circle.png';
 				'redo',    'Redo [CTRL+Y]',           'redo',    [2,2], 'orange_circle.png';
 			};
-			figHeight = this.fig.Position(4);
-topLeftPanel = uipanel(...
+			this.topLeftPanel = uipanel(...
 				'Parent',this.fig,...
 				'BackgroundColor',this.palette.uiBackground,...
 				'BorderType','none',...
 				'Units','pixels',...
-				'Position',[0,figHeight,0,0]+[0,-1,1,1]*(width*2+horzSpacing*3));
+				'Position',[0,0,1,1]*(width*2+horzSpacing*3)); % Absolute placement will be updated in figureResizeFunc();
 			for btnInd = 1:size(buttonOptions,1)
 				coords = buttonOptions{btnInd,4};
 				startHeight = (height+vertSpacing)*coords(1) - height;
 				startWidth  = (width +horzSpacing)*coords(2) - width;
 				% Create the helper buttons (confirm, reject, undo, redo)
-				this.generalButtons.(buttonOptions{btnInd,1}) = uicontrol(...
+				this.generalButtons.(buttonOptions{btnInd,1}) = BetterButton(...
+					buttonBevelBright,buttonBevelDark,borderThickness,...
 					'Style','pushbutton',...
 					'String','',...
 					'Units','pixels',...
-					'Position',[startWidth,startHeight,width,height],...
+					'Position',[startWidth+1,startHeight+1,width,height],...
 					'Tooltip',buttonOptions{btnInd,2},...
 					'Callback',@(~,~) this.toolCallback(buttonOptions{btnInd,3}),...
 					'BackgroundColor',this.palette.buttonBackground,...
-					'Parent',topLeftPanel...
+					'Parent',this.topLeftPanel...
 				);
 				this.setupImageButton(...
 					this.generalButtons.(buttonOptions{btnInd,1}),...
@@ -636,17 +666,24 @@ for ind = 1:numel(mapData)
 	
 end
 			
+			% Forcibly invoke a figure resize event, so the graphics can be
+			% laid out correctly
+			this.figureResizeFunc();
+			
+			% Now show the figure
+			this.fig.Visible = 'on';
+			
 		end
 		% Sets up the provided uicontrol button with the specified image
 		% file. imPath is relative to the GUI Assets folder.
 		function setupImageButton(this,uic,imPath)
 			[im,~,tr] = imread(fullfile(this.getInstallDir(),'GUI Assets',imPath));
-			bgColor = permute(uic.BackgroundColor,[1,3,2]);
+			bgColor = permute(uic.UserData.backgroundColor,[1,3,2]);
 			im = double(im)/255;
 			tr = double(tr)/255;
 			im_ = im .* tr + (1-tr).*bgColor;
 			finalSize = uic.Position(3:4);
-			uic.CData = clamp(imresize(im_,finalSize+4),0,1);
+			uic.CData = clamp(imresize(im_,finalSize-2*uic.UserData.borderThickness),0,1);
 		end
 		% The callback for keypresses
 		function keyPressCallback(this,~,event)
@@ -694,6 +731,26 @@ end
 			this.highlight2.radius = this.sizes.pointHighlightRadius * zoomAmount;
 			
 		end
+		% The figure resize callback
+		function figureResizeFunc(this)
+			
+			% Discard this callback if the figure isn't fully created yet
+			if isempty(this.fig)
+				return
+			end
+			
+			figWidth  = this.fig.Position(3);
+			figHeight = this.fig.Position(4);
+			
+			% Relocate the panels
+			this.topLeftPanel.Position(1:2) = [1,figHeight-this.topLeftPanel.Position(4)+1];
+			this.bottomLeftPanel.Position(1:2) = [1,1];
+			
+			% Reposition the axes
+			axesSize = min([figWidth,figHeight]);
+			this.globeAx.Position = [floor(1+figWidth/2-axesSize/2),floor(1+figHeight/2-axesSize/2),axesSize,axesSize];
+			
+		end
 	end
 	
 	
@@ -712,10 +769,8 @@ end
 		maxAngleStep_rad = 0.02;
 	end
 	methods (Access = public)
-		function stop(this)
-			this.toolIsLive = false;
-			this.toolLiveData.refNodes = nan(0,3);
-		end
+
+		
 	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *

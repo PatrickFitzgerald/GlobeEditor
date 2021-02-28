@@ -6,12 +6,13 @@ classdef RepeatedTaskPerformer < handle
 		minPeriod_s;
 		maxRunDuration_s;
 		callback = @(elapsedTime_s) [];
+		cleanupFunc = @() [];
 		earlyHalt = false;
 	end
 	
 	methods (Access = public)
 		% Constructor
-		function this = RepeatedTaskPerformer(minPeriod_s,maxRunDuration_s,callback)
+		function this = RepeatedTaskPerformer(minPeriod_s,maxRunDuration_s,callback,cleanupFunc)
 			
 			% To avoid a warning, truncate the minPeriod_s to milliseconds
 			minPeriod_s = round(minPeriod_s,3);
@@ -28,6 +29,7 @@ classdef RepeatedTaskPerformer < handle
 			this.maxRunDuration_s = maxRunDuration_s;
 			this.startTime_d = now();
 			this.callback = callback;
+			this.cleanupFunc = cleanupFunc;
 			% Start the timer.
 			start(this.timerObj);
 		end
@@ -59,6 +61,9 @@ classdef RepeatedTaskPerformer < handle
 			
 			% Prevent this from running again in the future.
 			if elapsedTime_s > this.maxRunDuration_s
+				% Invoke the cleanup function
+				this.cleanupFunc();
+				% And halt the timer going forward
 				this.terminate();
 			end
 		end

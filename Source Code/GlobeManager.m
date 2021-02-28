@@ -9,7 +9,7 @@ classdef GlobeManager < handle
 		% Settings
 		lookAtPos    = [1;0;0];
 		lookUpVector = [0;0;1];
-		zoomAmount   = 10.0;
+		zoomAmount   = 12.0;
 		
 		% Parameters
 		zoomRate   = 1.025;
@@ -519,7 +519,8 @@ classdef GlobeManager < handle
 				this.remainingSpin_deg = 180;
 				this.blindlyRejectEvents = true;
 				RepeatedTaskPerformer(1/maxFPS_Hz,maxTime_s,...
-					@(elapsedTime_s) this.spinUpVector(elapsedTime_s,maxTime_s));
+					@(elapsedTime_s) this.spinUpVector(elapsedTime_s,maxTime_s),... % repeat callback
+					@() this.finishUpVectorSpin()); % cleanup callback
 			else % Normal behavior
 				this.ax.CameraUpVector = this.lookUpVector';
 			end
@@ -544,13 +545,11 @@ classdef GlobeManager < handle
 			% Bookkeeping to make sure we don't spin too far.
 			this.remainingSpin_deg = clamp(this.remainingSpin_deg - deltaSpin_deg,0,180);
 			
-			% If we've finished, stop rejecting mouse events.
-			if this.remainingSpin_deg == 0
-				this.blindlyRejectEvents = false;
-			end
-			
 		end
-		
+		% Tidies up everything after the spinning.
+		function finishUpVectorSpin(this)
+			this.blindlyRejectEvents = false;
+		end
 	end
 	
 end
