@@ -19,6 +19,7 @@ classdef GlobeManager < handle
 		% Temporary
 		eventState; % struct, see resetEventState()
 		isSustained = false;
+		isPanAction = false;
 		remainingSpin_deg = 0; % Used to spin the up vector to correct orientation over time.
 		blindlyRejectEvents = false; % Whether we're spinning the up vector currently
 		
@@ -31,10 +32,6 @@ classdef GlobeManager < handle
 		callback_MouseDrag  function_handle = @(info) [];
 		callback_MouseLift  function_handle = @(info) [];
 		callback_ZoomChange function_handle = @(zoomAmount) [];
-		
-		% When true, the custom click/drag callbacks are overridden and the
-		% free-pan is enabled
-		clickPanEnabled logical = false;
 		
 		% Whether to enforce matlab's standard camera orientation
 		preventCameraTilt logical = true;
@@ -107,6 +104,7 @@ classdef GlobeManager < handle
 				'wasDrag',  false ...
 			);
 			this.isSustained = false;
+			this.isPanAction = false;
 		end
 		
 		% Returns the current zoomAmount
@@ -171,7 +169,7 @@ classdef GlobeManager < handle
 				if ~isOnGlobe && this.isSustained
 					% This will prevent the assignments below from
 					% corrupting the event state
-					if this.clickPanEnabled
+					if this.isPanAction
 						% Setting this to xyz_start will prevent it from
 						% panning
 						globeClickPos = this.eventState.xyz_start;
@@ -195,6 +193,8 @@ classdef GlobeManager < handle
 			% If we're starting a NEW sustained event, record that
 			if isMouseDown
 				this.isSustained = true;
+				% If the user is holding control
+				this.isPanAction = ismember('control',this.fig.CurrentModifier);
 			end
 			
 			
@@ -212,7 +212,7 @@ classdef GlobeManager < handle
 				% Leave this.eventState.wasDrag alone
 				
 				% Invoke callback
-				if this.clickPanEnabled % Direct pan mode
+				if this.isPanAction % Direct pan mode
 					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
 					this.updateView();
 				else % custom callbacks
@@ -233,7 +233,7 @@ classdef GlobeManager < handle
 				this.eventState.wasDrag   = false;
 				
 				% Invoke callback
-				if this.clickPanEnabled % Direct pan mode
+				if this.isPanAction % Direct pan mode
 					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
 					this.updateView();
 				else % custom callbacks
@@ -253,7 +253,7 @@ classdef GlobeManager < handle
 				this.eventState.wasDrag   = true;
 				
 				% Invoke callback
-				if this.clickPanEnabled % Direct pan mode
+				if this.isPanAction % Direct pan mode
 					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
 					this.updateView();
 				else % custom callbacks
@@ -272,7 +272,7 @@ classdef GlobeManager < handle
 				% Leave this.eventState.wasDrag   alone
 				
 				% Invoke callback
-				if this.clickPanEnabled % Direct pan mode
+				if this.isPanAction % Direct pan mode
 					this.panHelper(this.eventState.xyz_start,this.eventState.xyz_last,1.0); % 1.0 = pan by the full amount
 					this.updateView(this.preventCameraTilt); % Conditionally force the viewed orientation to be normal, now that the user is done clicking
 				else % custom callbacks

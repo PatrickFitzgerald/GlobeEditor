@@ -30,7 +30,7 @@ classdef MapEditor < handle
 			% The internal callbacks are populated by keyPressCallback()
 			
 			% Enable the default tool
-			this.tool_enable_pan();
+			this.tool_enable_pencil();
 			
 			% Now that we've finished the constructor, mark this object as
 			% initialized.
@@ -69,7 +69,7 @@ classdef MapEditor < handle
 	% * * * * * * * * * * * SETTINGS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		sizes = struct(...
-			'toolButtonSize',   72,...
+			'toolButtonSize',   45,...
 			'toolButtonPadding',10,...
 			'pointHighlightRadius',0.0012,...
 			'buttonBorderThickness',4 ... % keep it a multiple of 2
@@ -249,24 +249,8 @@ classdef MapEditor < handle
 			% Start by cleaning up whatever tool was previously working
 			this.tool_cleanup_heavy();
 			
-			% Assign the callback manager
-			this.toolCallback = @(varargin) disp((now - 7.382157004490740e+05)*24*3600);
-			
 			% Mark this tool as active
 			this.activeTool = 'select';
-			
-		end
-		% Enable pan tool
-		function tool_enable_pan(this)
-			
-			% Start by cleaning up whatever tool was previously working
-			this.tool_cleanup_heavy();
-			
-			% Enable the pan feature on the GlobeManager
-			this.globeManager.clickPanEnabled = true;
-			
-			% Mark this tool as active
-			this.activeTool = 'pan';
 			
 		end
 		% Enable pencil tool
@@ -315,8 +299,6 @@ classdef MapEditor < handle
 			switch this.activeTool
 				case 'select'
 					
-				case 'pan'
-					this.globeManager.clickPanEnabled = false;
 				case 'pencil'
 					
 				case 'drag'
@@ -345,8 +327,6 @@ classdef MapEditor < handle
 			% Apply custom light cleaning/reset for the specific tool
 			switch this.activeTool
 				case 'select'
-					
-				case 'pan'
 					
 				case 'pencil'
 					this.toolLiveData = struct(...
@@ -543,7 +523,6 @@ return % for now
 			toolOptions = {...
 			%    field name   tooltip                       callback
 				'select',    'Select features',             @(~,~)this.tool_enable_select();
-				'pan',       'Pan with click+drag',         @(~,~)this.tool_enable_pan();
 				'pencil',    'Draw lines and boundaries',   @(~,~)this.tool_enable_pencil();
 				'drag',      'Smoothly drag features',      @(~,~)this.tool_enable_drag();
 				'stretch',   'Stretch and shrink features', @(~,~)this.tool_enable_stretch();
@@ -585,11 +564,11 @@ return % for now
 			end
 			
 			buttonOptions = {
-			%    field name   tooltip                  callback  coords  image path    
-				'confirm', 'Confirm Changes [ENTER]', 'confirm', [1,1], 'green_check.png';
-				'reject',  'Reject Changes [ESCAPE]', 'reject',  [1,2], 'red_x.png';
-				'undo',    'Undo [CTRL+Z]',           'undo',    [2,1], 'blue_circle.png';
-				'redo',    'Redo [CTRL+Y]',           'redo',    [2,2], 'orange_circle.png';
+			%    field name   tooltip                callback args  coords  image path    
+				'confirm', 'Confirm Changes [ENTER]', {'confirm'},  [1,1], 'green_check.png';
+				'reject',  'Reject Changes [ESCAPE]', {'reject'},   [1,2], 'red_x.png';
+				'undo',    'Undo [CTRL+Z]',           {'undo',1},   [2,1], 'blue_circle.png';
+				'redo',    'Redo [CTRL+Y]',           {'redo',1},   [2,2], 'orange_circle.png';
 			};
 			this.topLeftPanel = uipanel(...
 				'Parent',this.fig,...
@@ -609,7 +588,7 @@ return % for now
 					'Units','pixels',...
 					'Position',[startWidth+1,startHeight+1,width,height],...
 					'Tooltip',buttonOptions{btnInd,2},...
-					'Callback',@(~,~) this.toolCallback(buttonOptions{btnInd,3}),...
+					'Callback',@(~,~) this.toolCallback(buttonOptions{btnInd,3}{:}),...
 					'BackgroundColor',this.palette.buttonBackground,...
 					'Parent',this.topLeftPanel...
 				);
