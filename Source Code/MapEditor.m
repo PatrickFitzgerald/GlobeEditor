@@ -69,7 +69,7 @@ classdef MapEditor < handle
 	% * * * * * * * * * * * SETTINGS MANAGEMENT * * * * * * * * * * * * * *
 	properties (Access = private)
 		sizes = struct(...
-			'toolButtonSize',   45,...
+			'toolButtonSize',   72,...
 			'toolButtonPadding',10,...
 			'pointHighlightRadius',0.0012,...
 			'buttonBorderThickness',4 ... % keep it a multiple of 2
@@ -248,6 +248,9 @@ classdef MapEditor < handle
 			
 			% Start by cleaning up whatever tool was previously working
 			this.tool_cleanup_heavy();
+			
+			% Assign the callback manager
+			this.toolCallback = @(varargin) disp((now - 7.382157004490740e+05)*24*3600);
 			
 			% Mark this tool as active
 			this.activeTool = 'select';
@@ -742,13 +745,23 @@ end
 			figWidth  = this.fig.Position(3);
 			figHeight = this.fig.Position(4);
 			
+			% Prepare storage for the list of Position-style rectangles to
+			% discard globe-managed clicks within
+			noClickZones = nan(0,4);
+			
 			% Relocate the panels
+			
 			this.topLeftPanel.Position(1:2) = [1,figHeight-this.topLeftPanel.Position(4)+1];
+			noClickZones(end+1,:) = this.topLeftPanel.Position;
+			
 			this.bottomLeftPanel.Position(1:2) = [1,1];
+			noClickZones(end+1,:) = this.bottomLeftPanel.Position;
 			
 			% Reposition the axes
 			axesSize = min([figWidth,figHeight]);
 			this.globeAx.Position = [floor(1+figWidth/2-axesSize/2),floor(1+figHeight/2-axesSize/2),axesSize,axesSize];
+			
+			this.globeManager.noClickZones = noClickZones;
 			
 		end
 	end
@@ -769,8 +782,29 @@ end
 		maxAngleStep_rad = 0.02;
 	end
 	methods (Access = public)
-
-		
+		function timeTest(this)
+			c1 = this.generalButtons.redo.Callback();
+			c2 = this.generalButtons.reject.Callback();
+			b1 = this.generalButtons.redo.UserData.javaObject;
+			b2 = this.generalButtons.reject.UserData.javaObject;
+			times = nan(50,1);
+			for n = 1:50
+				tic()
+				b1.MouseEnteredCallback([],[]);
+				b1.MousePressedCallback([],[]);
+				b1.MouseReleasedCallback([],[]);
+				c1([],[]);
+				b1.MouseExitedCallback([],[]);
+				
+				b2.MouseEnteredCallback([],[]);
+				b2.MousePressedCallback([],[]);
+				b2.MouseReleasedCallback([],[]);
+				c2([],[]);
+				b2.MouseExitedCallback([],[]);
+				times(n) = toc();
+			end
+			figure; plot(times);
+		end
 	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *

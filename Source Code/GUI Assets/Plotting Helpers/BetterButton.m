@@ -113,12 +113,15 @@ function uic = BetterButton(bevelHighlightColor,bevelShadowColor,borderThickness
 	end
 	
 	function propertyChanged(e,uic)
+		
 		if ~strcmp( get(e,'propertyName'), 'border')
 			return
 		end
+		
 		if ~uic.UserData.borderIsUpdating
 			uic.UserData.forceRefresh();
 		end
+		
 	end
 	
 end

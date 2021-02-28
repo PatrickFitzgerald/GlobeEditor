@@ -39,6 +39,9 @@ classdef GlobeManager < handle
 		% Whether to enforce matlab's standard camera orientation
 		preventCameraTilt logical = true;
 		
+		% A list of Position-style rectangles which are no-click zones
+		noClickZones (:,4) double = nan(0,4);
+		
 	end
 	
 	methods (Access = public)
@@ -130,20 +133,37 @@ classdef GlobeManager < handle
 			isMouseMove = strcmp(mode,'MouseMove');
 			isMouseLift = strcmp(mode,'MouseLift');
 			
+			% Check some click location conditions if we are testing a new
+			% event
+			if ~this.isSustained
+				% If the click isn't even inside the axes, discard it
+				intersectsGood = checkIntersectionRect(this.fig.CurrentPoint,this.ax.OuterPosition);
+				if ~intersectsGood
+					return
+				end
+				% If the cursor is inside one of the no click zones,
+				% discard it
+				intersectsBad = checkIntersectionRect(this.fig.CurrentPoint,this.noClickZones);
+				if any(intersectsBad)
+					return
+				end
+			end
+			
 			
 			% Events are rejected if it didn't happen somewhere on the
 			% globe, except for edge cases.
 			
 			% Determine where the cursor is on the globe
 			[isOnGlobe,globeClickPos] = this.getCurrentGlobePoint();
+			
+			% Discard new events if they're not on the globe
+			if ~isOnGlobe && ~this.isSustained
+				return
+			end
+			
 			% We need some unreasonably complicated conditional behavior to
 			% make the preventCameraTilt cases not be wonky.
 			if this.preventCameraTilt
-				% When these orientation controls are on, it behaves
-				% erratically when you let it update 
-				if ~isOnGlobe && isMouseDown
-					return
-				end
 				% If we're not on the globe, and we're sustained, and we
 				% are either in a Move or Lift mode, we want to keep the
 				% camera still, and not distort any externally meaningful
@@ -159,11 +179,6 @@ classdef GlobeManager < handle
 						% Keep the state unchanged
 						%    globeClickPos = globeClickPos;
 					end
-				end
-			else % Free pan
-				% If its a drag or a lift, its fine
-				if ~isOnGlobe && isMouseDown
-					return
 				end
 			end
 			
