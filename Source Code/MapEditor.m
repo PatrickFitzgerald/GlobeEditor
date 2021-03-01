@@ -418,7 +418,12 @@ disp(this.toolLiveData.refNodes)
 						this.toolIsLive = true;
 						this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
 					else % Otherwise, add this point to the reference nodes
-						this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
+						% Make sure we don't record if the user clicks the
+						% same point twice in a row. Be safe when the user
+						% has undone all the points.
+						if size(this.toolLiveData.refNodes,1)==0 || ~isequal(this.toolLiveData.refNodes(end,:),info.xyz_last')
+							this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
+						end
 						% To avoid some funky behavior that manifests with
 						% my double-assignment in the other IF section,
 						% check for duplicates which should have been
@@ -683,17 +688,25 @@ end
 			end
 			
 			if strcmp(event.Key,'return') % CONFIRM
-				warning('Add qualifiers on when these keypress actions occur');
-				this.toolCallback('confirm');
+				if this.toolIsLive
+					this.toolCallback('confirm');
+				end
 			elseif strcmp(event.Key,'z') && ismember('control',event.Modifier) % UNDO
-				warning('Add qualifiers on when these keypress actions occur')
-				this.toolCallback('undo',undoRedoNum);
+				if this.toolIsLive
+					this.toolCallback('undo',undoRedoNum);
+				else
+					this.operationManager('undo');
+				end
 			elseif strcmp(event.Key,'y') && ismember('control',event.Modifier) % REDO
-				warning('Add qualifiers on when these keypress actions occur')
-				this.toolCallback('redo',undoRedoNum);
+				if this.toolIsLive
+					this.toolCallback('redo',undoRedoNum);
+				else
+					this.operationManager('redo');
+				end
 			elseif strcmp(event.Key,'escape')
-				warning('Add qualifiers on when these keypress actions occur')
-				this.toolCallback('reject');
+				if this.toolIsLive
+					this.toolCallback('reject');
+				end
 			end
 			
 		end
@@ -751,6 +764,10 @@ end
 	end
 	methods (Access = private)
 		% When loading a file from file, set the lastSaveDatenum to now()
+		
+		function operationManager(this,mode)
+			disp(mode);
+		end
 	end
 	
 	

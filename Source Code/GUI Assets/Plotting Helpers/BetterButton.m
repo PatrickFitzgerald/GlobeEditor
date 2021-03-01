@@ -61,6 +61,14 @@ function uic = BetterButton(bevelHighlightColor,bevelShadowColor,borderThickness
 	
 	function mouseCallback(mode,uic)
 		
+		% If we don't already have a copy of the CData, and it exists, make
+		% a copy of it
+		if ~isfield(uic.UserData,'CData') && ~isempty(uic.CData)
+			uic.UserData.CData = uic.CData;
+			% The actual CData can be modified, and we can recover it with
+			% this.
+		end
+		
 		% Extract some variables for convenience
 		wasPressed = uic.UserData.isPressed; % Solely for the button state
 		wasClicked = uic.UserData.isClicked; % Solely for the mouse button state
@@ -89,11 +97,23 @@ function uic = BetterButton(bevelHighlightColor,bevelShadowColor,borderThickness
 			uic.UserData.borderIsUpdating = true;
 			uic.UserData.javaObject.Border = uic.UserData.bevelPressed;
 			uic.UserData.borderIsUpdating = false;
+			% If we have original CData, shift it to mimic the button
+			% depression elsewhere
+			if isfield(uic.UserData,'CData')
+				shift = uic.UserData.borderThickness/2;
+				newCData = repmat(permute(uic.UserData.backgroundColor(:),[3,2,1]),[size(uic.UserData.CData,1),size(uic.UserData.CData,2),1]);
+				newCData(1+shift:end,1+shift:end,:) = uic.UserData.CData(1:end-shift,1:end-shift,:);
+				uic.CData = newCData;
+			end
 		% If we're becoming not pressed
 		elseif ~doPress && wasPressed
 			uic.UserData.borderIsUpdating = true;
 			uic.UserData.javaObject.Border = uic.UserData.bevelNormal;
 			uic.UserData.borderIsUpdating = false;
+			% If we have original CData, restore it.
+			if isfield(uic.UserData,'CData')
+				uic.CData = uic.UserData.CData;
+			end
 		end
 		
 		% Store state
