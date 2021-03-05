@@ -362,7 +362,8 @@ classdef MapEditor < handle
 				case 'pencil'
 					this.toolLiveData = struct(...
 						'refNodes',nan(0,3),...
-						'undoData',nan(0,3)...
+						'undoData',nan(0,3),...
+						'PathObj',Path(this.globeAx,this.maxAngleStep_rad)...
 					);
 				case 'drag'
 					
@@ -405,14 +406,19 @@ classdef MapEditor < handle
 			switch mode
 				case 'confirm'
 					
-disp(this.toolLiveData.refNodes)
+					finish(this.toolLiveData.PathObj); % Disables markup mode.
+a = this.toolLiveData.PathObj
 					% Set to not-live, and wipe the storage
 					this.tool_cleanup_light();
+					return
 					
 				case 'reject'
 					
+					% Remove previous PathObj
+					delete(this.toolLiveData.PathObj);
 					% Set to not-live, and wipe the storage without saving
 					this.tool_cleanup_light();
+					return
 					
 				case 'undo'
 					
@@ -447,6 +453,7 @@ disp(this.toolLiveData.refNodes)
 					% original
 					if ~this.toolIsLive
 						this.toolIsLive = true;
+						markup(this.toolLiveData.PathObj); % Enables markup mode
 						this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
 					else % Otherwise, add this point to the reference nodes
 						% Make sure we don't record if the user clicks the
@@ -485,21 +492,15 @@ return % for now
 			
 			% If we're still running, something was updated, so update the
 			% shown plot
-			numNodes = size(this.toolLiveData.refNodes,1);
-			if numNodes < 2 % Too few to interpolate
-				% No line to show
-				slerpedData = nan(0,3);
-			else % Enough to interpolate
-				slerpedData = slerp(this.toolLiveData.refNodes,this.maxAngleStep_rad);
-			end
+			this.toolLiveData.PathObj.refPoints = this.toolLiveData.refNodes; % Automatic redraw
 			
-			if numNodes == 0 % No points
+			% Manage the highlight points
+			if size(this.toolLiveData.refNodes,1) == 0 % No points
 				this.highlight1.centerPoints = nan(0,3);
 			else % At least one point
 				% Show the last point
 				this.highlight1.centerPoints = this.toolLiveData.refNodes(end,:);
 			end
-			updatePlotMatrix(this.plot_,slerpedData);
 			
 		end
 	end
@@ -870,9 +871,8 @@ end
 	% option to snap to nearby points. Prevent snapping to invalid points,
 	% such as the previous point in a line.
 	
-	% When that special behavior triggers inside GlobeManager>renormalizeCameraSettings()   
-	% then perform an animation to rotate the camera into place over 0.5 or
-	% 1.0 sec.
+	% Make a closing prompt, informing user of unsaved content, etc. 
+	% Make sure any settings changes, etc, get saved before closing.
 	
 	% While in the pencil mode (and likely others) these are the controls
 		% CLICK = place point
