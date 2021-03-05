@@ -15,8 +15,11 @@ classdef MapEditor < handle
 			% Manage matlab path
 			AddPaths;
 			
+			% Initialize settings save delay manager
+			this.initSettingsSaving();
 			% Load settings, if available
 			this.loadSettings();
+			
 			
 			% Create the graphics for the editor
 			this.createGraphics();
@@ -48,7 +51,7 @@ classdef MapEditor < handle
 		function userDataDir = getUserDataDir(this)
 			% Determine the path of the user data
 			installDir = this.getInstallDir();
-			userDataDir = fullfile(installDir,'User Data');
+			userDataDir = fullfile(installDir,'..','User Data'); % Not in code directory...
 			% Safely make the folder if it doesn't exist, leave it alone if
 			% it does.
 			[~,~,~] = mkdir(userDataDir);
@@ -83,13 +86,27 @@ classdef MapEditor < handle
 		);
 		settings = struct(... % UPDATE set.settings() and loadSettings() TO MATCH
 			'figurePosition',[100,100,1200,900],...
+			'windowState','normal',...
 			'doAutosave',true,...
 			'autosavePeriod_s',300,...
 			'lockCameraOrientation',true,...
 			'numUndoRedoWhenShifted',10 ...
 		);
+		settingsSaveDelay_s = 1.0; % Wait this long after settings modification to save. Timer resets upon rapidfire changes.
+		settingsSaveTimer;
 	end
 	methods (Access = private)
+		% Creates the settingsSaveTimer, which will wait until a specific
+		% amount of time has passed since the last settings update to save
+		% anything. This means rapidfire settings modifications will only
+		% save when they finish (e.g. figure size change)
+		function initSettingsSaving(this)
+			this.settingsSaveTimer = DelayedTaskPerformer(...
+				this.settingsSaveDelay_s,...
+				@()this.saveSettings(),...
+				false...
+			);
+		end
 		% Returns the path to the settings file. Makes folders as necessary
 		function settingsPath = getSettingsPath(this)
 			% Get the path to the user data directory. Guarantees folder
@@ -135,6 +152,7 @@ classdef MapEditor < handle
 			isScalarBool = @(v) isscalar(v) && (isa(v,'logical') || ismember(v,[0,1]));
 			checks = {
 				'figurePosition',         @(v) isnumeric(v) && isvector(v) && numel(v)==4 && all(imag(v)==0) && all(v(3:4)>0); % valid position 4-vector
+				'windowState',            @(v) ischar(v) && ismember(v,{'normal','maximized'}); % supported charvector
 				'doAutosave',             @(v) isScalarBool(v); % scalar bool
 				'autosavePeriod_s',       @(v) isnumeric(v) && isscalar(v) && imag(v)==0 && v>0; % positive real scalar
 				'lockCameraOrientation',  @(v) isScalarBool(v); % scalar bool
@@ -148,7 +166,7 @@ classdef MapEditor < handle
 				checkFunc     = checks{checkInd,2};
 				% Check for the existence of the field, and then check its
 				% value
-				if ~ismember(expectedField,fields_) && checkFunc( settingsL.(expectedField) )
+				if ismember(expectedField,fields_) && checkFunc( settingsL.(expectedField) )
 					% Passed check, copy it into settingsU
 					settingsU.(expectedField) = settingsL.(expectedField);
 				else
@@ -165,7 +183,7 @@ classdef MapEditor < handle
 		% Save settings to file
 		function saveSettings(this)
 			% Get the settings path. Guarantees folder exists.
-			settingsPath = getSettingsAutosavePath();
+			settingsPath = this.getSettingsPath();
 			
 			% Extract off a copy of everything we plan to save
 			settings = this.settings; %#ok<NASGU,PROP>
@@ -198,7 +216,8 @@ classdef MapEditor < handle
 			
 			
 			% Don't update settings elsewhere if most of the MapEditor has
-			% not been instantiated yet.
+			% not been instantiated yet. Do this after the values have been
+			% assigned.
 			if ~this.isInitialized %#ok<MCSUP>
 				return;
 			end
@@ -207,6 +226,10 @@ classdef MapEditor < handle
 			% Perform any necessary updating now. Separate IF checks in
 			% case multiple changed.
 			if ismember('figurePosition',changedFields)
+				% Nothing here, this setting happens after the GUI is
+				% updated
+			end
+			if ismember('windowState',changedFields)
 				% Nothing here, this setting happens after the GUI is
 				% updated
 			end
@@ -229,6 +252,14 @@ classdef MapEditor < handle
 			if ismember('numUndoRedoWhenShifted',changedFields)
 				% Nothing needs updating, this is actively checked whenever
 				% it's used.
+			end
+			
+			
+			% Save these settings to file
+			if ~isempty(changedFields)
+				% Restart the timer. If it's currently inactive, it starts
+				% it. If it's already running, it resets the timer.
+				restart(this.settingsSaveTimer); %#ok<MCSUP>
 			end
 			
 		end
@@ -480,6 +511,9 @@ return % for now
 		globeManager;
 		globeAx;
 		
+		windowStateCheckDelay_s = 0.1; % should be less than the settings save delay
+		windowStateChecker;
+		
 		topLeftPanel;
 		bottomLeftPanel;
 		
@@ -504,6 +538,7 @@ return % for now
 			% Make the figure. Make it invisible to start.
 			this.fig = figure(...
 				'Position',this.settings.figurePosition,...
+				'WindowState',this.settings.windowState,...
 				'Color',this.palette.space,...
 				'DockControls','off',...
 				'MenuBar','none',...
@@ -541,13 +576,6 @@ return % for now
 			borderThickness = this.sizes.buttonBorderThickness;
 			buttonBevelBright = this.palette.buttonBevelBright;
 			buttonBevelDark   = this.palette.buttonBevelDark;
-			
-% 			uic = 
-% 				'Style','pushbutton',...
-% 				'Position',[100,100,width,height],...
-% 				'Callback','disp(''clicked'')',...
-% 				'CData',ones(height-borderThickness,width-borderThickness,3)*baseBrightness ...
-% 			);
 			
 			this.bottomLeftPanel = uipanel(...
 				'Parent',this.fig,...
@@ -609,6 +637,16 @@ return % for now
 			this.updateZoomAmount(); % updates highlightX.radius
 			
 			
+			% Create an object which will help catch whether the window
+			% state changed after a figure resize. It doesn't seem to be
+			% available immediately when the resize callback is invoked.
+			this.windowStateChecker = DelayedTaskPerformer(...
+				this.windowStateCheckDelay_s,...
+				@()this.checkWindowState(),...
+				false...
+			);
+			
+			
 this.plot_ = plot(nan,nan,'Color',[0,0,0],'LineWidth',2);
 
 [points,faces,~,~] = IrregularSpherePoints(3e4);
@@ -652,6 +690,8 @@ for ind = 1:numel(mapData)
 	end
 	
 end
+			%
+			
 			
 			% Forcibly invoke a figure resize event, so the graphics can be
 			% laid out correctly
@@ -659,6 +699,11 @@ end
 			
 			% Now show the figure
 			this.fig.Visible = 'on';
+			
+			% Add a callback for movement, which won't trigger resizing
+			% callback
+			figureJavaHandle = findjobj(this.fig,'class','com.mathworks.hg.peer.FigureFrameProxy$FigureFrame'); % This took a lot of trial and error :/
+			set(figureJavaHandle,'ComponentMovedCallback',@(~,~) this.figureMovedFunc()); % first one seems to be sufficient
 			
 		end
 		% Sets up the provided uicontrol button with the specified image
@@ -710,8 +755,6 @@ end
 			end
 			
 		end
-% separate undo/redo callback. manage between global/local callback.
-% determine how many nodes to undo at once
 		% Updates things tied to the zoom level of the GlobeManager.
 		% Argument is optional
 		function updateZoomAmount(this,zoomAmount)
@@ -737,6 +780,14 @@ end
 			figWidth  = this.fig.Position(3);
 			figHeight = this.fig.Position(4);
 			
+			% Update the figure position/window state. Will save these
+			% settings to file. The saving will not happen excessively
+			% frequently.
+			this.settings.figurePosition = this.fig.Position;
+			% Restart the timer. If it's currently inactive, it starts
+			% it. If it's already running, it resets the timer.
+			restart(this.windowStateChecker)
+			
 			% Prepare storage for the list of Position-style rectangles to
 			% discard globe-managed clicks within
 			noClickZones = nan(0,4);
@@ -755,6 +806,19 @@ end
 			
 			this.globeManager.noClickZones = noClickZones;
 			
+		end
+		function checkWindowState(this)
+			% Only bother if its a reasonable window state
+			if ismember(this.fig.WindowState,{'normal','maximized'})
+				% Let the set.settings functionality handle whether it
+				% changed or not.
+				this.settings.windowState = this.fig.WindowState;
+			end
+		end
+		function figureMovedFunc(this)
+			% Update the figure position. Will save these settings to file.
+			% The saving will not happen excessively frequently.
+			this.settings.figurePosition = this.fig.Position;
 		end
 	end
 	
@@ -778,29 +842,7 @@ end
 		maxAngleStep_rad = 0.02;
 	end
 	methods (Access = public)
-		function timeTest(this)
-			c1 = this.generalButtons.redo.Callback();
-			c2 = this.generalButtons.reject.Callback();
-			b1 = this.generalButtons.redo.UserData.javaObject;
-			b2 = this.generalButtons.reject.UserData.javaObject;
-			times = nan(50,1);
-			for n = 1:50
-				tic()
-				b1.MouseEnteredCallback([],[]);
-				b1.MousePressedCallback([],[]);
-				b1.MouseReleasedCallback([],[]);
-				c1([],[]);
-				b1.MouseExitedCallback([],[]);
-				
-				b2.MouseEnteredCallback([],[]);
-				b2.MousePressedCallback([],[]);
-				b2.MouseReleasedCallback([],[]);
-				c2([],[]);
-				b2.MouseExitedCallback([],[]);
-				times(n) = toc();
-			end
-			figure; plot(times);
-		end
+		
 	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *
@@ -847,6 +889,8 @@ end
 		% final destination: flat (no 1/sin() scaling on border widths)   
 		% final destination: edit as raster and bring back to globe (apply scaling so returning it looks good)
 	% export map vector images??
+	
+	% Flesh out the operation manager (undo/redo)
 	
 	% how to efficiently find which facets a border falls into, and
 	%    subdivide the facets to color them
