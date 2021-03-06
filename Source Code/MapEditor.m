@@ -75,14 +75,17 @@ classdef MapEditor < handle
 			'toolButtonSize',   45,...
 			'toolButtonPadding',10,...
 			'pointHighlightRadius',0.0012,...
+			'highlightProximityFactor',2,... % in units of radii ^
 			'buttonBorderThickness',4 ... % keep it a multiple of 2
 		);
 		palette = struct(...
-			'space',[1,1,1]*0.1,...
-			'uiBackground',[1,1,1]*0.2,...
+			'space',            [1,1,1]*0.1,...
+			'uiBackground',     [1,1,1]*0.2,...
 			'buttonBackground', [1,1,1]*0.45,...
 			'buttonBevelBright',[1,1,1]*0.45*1.3,...
-			'buttonBevelDark',  [1,1,1]*0.45/1.3 ...
+			'buttonBevelDark',  [1,1,1]*0.45/1.3,...
+			'highlightColor1',  [1,1,1]*1,...
+			'highlightColor2',  [1,1,1]*0 ...
 		);
 		settings = struct(... % UPDATE set.settings() and loadSettings() TO MATCH
 			'figurePosition',[100,100,1200,900],...
@@ -384,122 +387,216 @@ classdef MapEditor < handle
 		% Pencil tool functionality
 		function tool_function_pencil(this,mode,varargin)
 			
-			% Double check what variables to expect
-			if ismember(mode,{'confirm','reject'})
-				% No extra varargin
-			elseif ismember(mode,{'redo','undo'})
-				% Number to undo is stored in varargin{1}
-				numNodesToUndo = varargin{1};
-			elseif ismember(mode,{'mousedown','mousemove','mousedrag','mouselift'})
-				% varargin{1} stores the 'info' struct from the
-				% GlobeManager about where the mouse event happened on the
-				% globe.
-				info = varargin{1};
-				% Perform some preprocessing, now that we know info exists.
-				% Holding ALT when dragging will place many reference nodes
-				if strcmp(mode,'mousedrag') && ismember('alt',info.mod_last)
-					mode = 'mousedown'; % This already has all the behavior we need
-				end
-			end
+			% Extract this path object for easier usage
+			pathObj = this.toolLiveData.PathObj;
 			
-			% Check all cases:
+			% Whether to show special highlighting in closing-loop
+			% situations. Gets updated conditionally below.
+			closeTheLoop = false;
+			
+			% Handle the different modes in groups, since many have common
+			% checks
 			switch mode
-				case 'confirm'
+				% INITIAL OPERATIONS, MODIFICATIONS
+				case {'mousedown','mousemove','mousedrag','mouselift'}
 					
-					finish(this.toolLiveData.PathObj); % Disables markup mode.
-a = this.toolLiveData.PathObj
-					% Set to not-live, and wipe the storage
-					this.tool_cleanup_light();
-					return
+					% varargin{1} stores the 'info' struct from the
+					% GlobeManager about where the mouse event happened on the
+					% globe.
+					info = varargin{1};
 					
-				case 'reject'
+					% Holding ALT when dragging will place many reference nodes
+					doContinuousDraw = false;
+					if strcmp(mode,'mousedrag') && ismember('alt',info.mod_last)
+						mode = 'mousedown'; % This already has all the behavior we need
+						doContinuousDraw = true;
+					end
 					
-					% Remove previous PathObj
-					delete(this.toolLiveData.PathObj);
-					% Set to not-live, and wipe the storage without saving
-					this.tool_cleanup_light();
-					return
-					
-				case 'undo'
-					
-					% Make a copy of what we're removing
-					this.toolLiveData.undoData = [this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:);this.toolLiveData.undoData];
-					% And remove it from the refNodes
-					this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:) = [];
-					
-				case 'redo'
-					
-					% Grab content from the undoData
-					this.toolLiveData.refNodes = [this.toolLiveData.refNodes;this.toolLiveData.undoData(1:min(numNodesToUndo,end),:)];
-					% Now remove that from the undoData, so it's not
-					% duplicated
-					this.toolLiveData.undoData(1:min(numNodesToUndo,end),:) = [];
-					
-				case 'mousedown' % Fresh click. Try starting anew, or just appending a new reference node.
-					
-					% If the user didn't click directly on the globe,
-					% discard the click.
-					if ~info.wasDirect_last
+					% If the tool is not live, and it wasn't a mousedown,
+					% discard the event. Only mouse down events can invoke
+					% live status
+					if ~this.toolIsLive && ~strcmp(mode,'mousedown')
+						% Discard
 						return
 					end
 					
-					% If we're still running, then we're adding at least
-					% one point. Discard the undo data
-					this.toolLiveData.undoData = nan(0,3);
-					
-					% If we're not currently live, start anew. Record this
-					% reference node twice, so we can modify the second
-					% entry after (with a drag) without removing the
-					% original
-					if ~this.toolIsLive
-						this.toolIsLive = true;
-						markup(this.toolLiveData.PathObj); % Enables markup mode
-						this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
-					else % Otherwise, add this point to the reference nodes
-						% Make sure we don't record if the user clicks the
-						% same point twice in a row. Be safe when the user
-						% has undone all the points.
-						if size(this.toolLiveData.refNodes,1)==0 || ~isequal(this.toolLiveData.refNodes(end,:),info.xyz_last')
-							this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
-						end
-						% To avoid some funky behavior that manifests with
-						% my double-assignment in the other IF section,
-						% check for duplicates which should have been
-						% removed. Remove them if not. This happens if you
-						% click twice without dragging.
-						if size(this.toolLiveData.refNodes,1) == 3 && isequal(this.toolLiveData.refNodes(1,:),this.toolLiveData.refNodes(2,:))
-							this.toolLiveData.refNodes(1,:) = [];
+					% Perform some special stuff to perform the
+					% complete-loop highlighting
+					% Check if the xyz_last and the initial point are close
+					% enough. Require at least 3 points in the list before
+					% allowing it.
+					if size(this.toolLiveData.refNodes,1) > 2 + strcmp(mode,'mousedrag') ...% when dragging, there's kind of one fake point
+						&& ~doContinuousDraw % One last requirement: don't do it while in the continuous draw mode
+						
+						angleDistance_rad = acos(dot(info.xyz_last',this.toolLiveData.refNodes(1,:)));
+						zoomAmount = this.globeManager.getZoomAmount();
+						pointRadius = this.sizes.pointHighlightRadius*zoomAmount; % As performed in updateZoomAmount()
+						% If the new point and the starting point are close
+						% enough
+						if angleDistance_rad <= pointRadius * this.sizes.highlightProximityFactor
+							closeTheLoop = true;
+							% Overwrite the xyz_last with the snapped
+							% coordinate.
+							info.xyz_last = this.toolLiveData.refNodes(1,:)';
 						end
 					end
 					
-				case 'mousemove'
+					switch mode
+						case 'mousedown' % Fresh click. Try starting anew, or just appending a new reference node.
+							
+							% If the user didn't click directly on the globe,
+							% discard the click.
+							if ~info.wasDirect_last
+								return
+							end
+							
+							% If we're still running, then we're adding at least
+							% one point. Discard the undo data
+							this.toolLiveData.undoData = nan(0,3);
+							
+							% If we're not currently live, start anew. Record this
+							% reference node twice, so we can modify the second
+							% entry after (with a drag) without removing the
+							% original
+							if ~this.toolIsLive
+								this.replaceSelection(pathObj); % Mark as selected
+								this.toolIsLive = true;
+								markup(this.toolLiveData.PathObj); % Enables markup mode
+								this.toolLiveData.refNodes(1:2,:) = repmat(info.xyz_last',2,1);
+							else % Otherwise, add this point to the reference nodes
+								% Make sure we don't record if the user clicks the
+								% same point twice in a row. Be safe when the user
+								% has undone all the points.
+								if size(this.toolLiveData.refNodes,1)==0 || ~isequal(this.toolLiveData.refNodes(end,:),info.xyz_last')
+									this.toolLiveData.refNodes(end+1,:) = info.xyz_last;
+								end
+								% To avoid some funky behavior that manifests with
+								% my double-assignment in the other IF section,
+								% check for duplicates which should have been
+								% removed. Remove them if not. This happens if you
+								% click twice without dragging.
+								if size(this.toolLiveData.refNodes,1) == 3 && isequal(this.toolLiveData.refNodes(1,:),this.toolLiveData.refNodes(2,:))
+									this.toolLiveData.refNodes(1,:) = [];
+								end
+							end
+							
+						case 'mousemove'
+							
+							if size(this.toolLiveData.refNodes,1) > 1
+								
+							end
+							
+						case 'mousedrag' % Drag portion of click-and-drag. Just update the last reference node to match
+							
+							this.toolLiveData.refNodes(end,:) = info.xyz_last;
+							
+							% If we're still running, then we're adding at least
+							% one point. Discard the undo data
+							this.toolLiveData.undoData = nan(0,3);
+							
+						case 'mouselift' % Click release.
+							
+							% If the path has been closed and the user
+							% releases the click, treat it as finalized,
+							% and invoke the CONFIRM callback. Don't
+							% trigger when there are not enough points.
+							% Otherwise we don't need to do anything.
+							if size(pathObj.refPoints,1)>2 && pathObj.isClosed
+								this.tool_function_pencil('confirm');
+							end
+							return
+							
+					end
 					
-return % for now
+				% INTERMEDIATE OPERATIONS
+				case {'redo','undo'}
 					
-				case 'mousedrag' % Drag portion of click-and-drag. Just update the last reference node to match
+					% Number to undo is stored in varargin{1}
+					numNodesToUndo = varargin{1};
 					
-					this.toolLiveData.refNodes(end,:) = info.xyz_last;
+					% If the tool is not live, we should not have received
+					% this callback
+					if ~this.toolIsLive
+						% Discard event
+						return
+					end
 					
-					% If we're still running, then we're adding at least
-					% one point. Discard the undo data
-					this.toolLiveData.undoData = nan(0,3);
+					switch mode
+						case 'undo'
+							% Make a copy of what we're removing
+							this.toolLiveData.undoData = [this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:);this.toolLiveData.undoData];
+							% And remove it from the refNodes
+							this.toolLiveData.refNodes(max(1,end-numNodesToUndo+1):end,:) = [];
+						case 'redo'
+							% Grab content from the undoData
+							this.toolLiveData.refNodes = [this.toolLiveData.refNodes;this.toolLiveData.undoData(1:min(numNodesToUndo,end),:)];
+							% Now remove that from the undoData, so it's not
+							% duplicated
+							this.toolLiveData.undoData(1:min(numNodesToUndo,end),:) = [];
+					end
 					
-				case 'mouselift' % Click release. 
+					% Continue running to update the graphics after the
+					% main switch-case.
 					
-% Nothing to do yet
+				% FINAL OPERATIONS
+				case {'confirm','reject'}
 					
+					% No extra varargin
+					
+					% If the tool is not live, we should not have received
+					% this callback
+					if ~this.toolIsLive
+						% Discard event
+						return
+					end
+					
+					switch mode
+						case 'confirm'
+							% Keep pathObj selected
+							finish(pathObj); % Disable markup mode.
+							% Save the path object
+this.layers(end+1,1) = pathObj;
+							% Reset the tool: set to not-live, and wipe the storage
+							this.tool_cleanup_light();
+						case 'reject'
+							% Remove previous PathObj
+							delete(this.toolLiveData.PathObj);
+							% Don't save anything
+							% Reset the tool: set to not-live, and wipe the storage
+							this.tool_cleanup_light();
+					end
+					
+					% We're done, nothing to manually modify on the plots.
+					% Either they were deleted, or they will update
+					% automatically.
+					return
+					
+				otherwise
+					error('Invalid tool mode ''%s''.',mode);
 			end
 			
-			% If we're still running, something was updated, so update the
-			% shown plot
-			this.toolLiveData.PathObj.refPoints = this.toolLiveData.refNodes; % Automatic redraw
+			
+			% If we're still running, update the shown plot
+			this.toolLiveData.PathObj.refPoints = this.toolLiveData.refNodes; % Automatic redraw, only if necessary
 			
 			% Manage the highlight points
-			if size(this.toolLiveData.refNodes,1) == 0 % No points
-				this.highlight1.centerPoints = nan(0,3);
-			else % At least one point
-				% Show the last point
-				this.highlight1.centerPoints = this.toolLiveData.refNodes(end,:);
+			switch size(this.toolLiveData.refNodes,1)
+				case 0 % No points
+					this.highlight1.centerPoints = nan(0,3);
+					this.highlight2.centerPoints = nan(0,3);
+				case 1 % Exactly one point
+					% Only show the first point
+					this.highlight1.centerPoints = nan(0,3);
+					this.highlight2.centerPoints = this.toolLiveData.refNodes(1,:);
+				otherwise % More than one point
+					% Show the first and last point
+					if closeTheLoop
+						this.highlight1.centerPoints = nan(0,3);
+						this.highlight2.centerPoints = this.toolLiveData.refNodes([1,end],:);
+					else % Normal operation
+						this.highlight1.centerPoints = this.toolLiveData.refNodes(1,:);
+						this.highlight2.centerPoints = this.toolLiveData.refNodes(end,:);
+					end
 			end
 			
 		end
@@ -524,6 +621,7 @@ return % for now
 		highlight2;
 		
 		backgroundSphereRadius = 0.999;
+		maxAngleStep_rad; % Will be updated based on backgroundSphereRadius
 		
 		sphereMeshPatch;
 	end
@@ -598,11 +696,11 @@ return % for now
 			end
 			
 			buttonOptions = {
-			%    field name   tooltip                callback args  coords  image path    
-				'confirm', 'Confirm Changes [ENTER]', {'confirm'},  [1,1], 'green_check.png';
-				'reject',  'Reject Changes [ESCAPE]', {'reject'},   [1,2], 'red_x.png';
-				'undo',    'Undo [CTRL+Z]',           {'undo',1},   [2,1], 'blue_circle.png';
-				'redo',    'Redo [CTRL+Y]',           {'redo',1},   [2,2], 'orange_circle.png';
+			%    field name   tooltip                callback                              coords  image path    
+				'confirm', 'Confirm Changes [ENTER]', @(~,~) this.toolCallback('confirm'),  [1,1], 'green_check.png';
+				'reject',  'Reject Changes [ESCAPE]', @(~,~) this.toolCallback('reject'),   [1,2], 'red_x.png';
+				'undo',    'Undo [CTRL+Z]',           @(~,~) this.undoRedoCallback('undo'), [2,1], 'blue_circle.png';
+				'redo',    'Redo [CTRL+Y]',           @(~,~) this.undoRedoCallback('redo'), [2,2], 'orange_circle.png';
 			};
 			this.topLeftPanel = uipanel(...
 				'Parent',this.fig,...
@@ -622,7 +720,7 @@ return % for now
 					'Units','pixels',...
 					'Position',[startWidth+1,startHeight+1,width,height],...
 					'Tooltip',buttonOptions{btnInd,2},...
-					'Callback',@(~,~) this.toolCallback(buttonOptions{btnInd,3}{:}),...
+					'Callback',buttonOptions{btnInd,3},...
 					'BackgroundColor',this.palette.buttonBackground,...
 					'Parent',this.topLeftPanel...
 				);
@@ -633,8 +731,8 @@ return % for now
 			
 			this.highlight1 = HighlightPoints(this.globeAx);
 			this.highlight2 = HighlightPoints(this.globeAx);
-% this.highlight1.color = [...];
-% this.highlight2.color = [...];
+			this.highlight1.color = this.palette.highlightColor1;
+			this.highlight2.color = this.palette.highlightColor2;
 			this.updateZoomAmount(); % updates highlightX.radius
 			
 			
@@ -647,9 +745,6 @@ return % for now
 				false...
 			);
 			
-			
-this.plot_ = plot(nan,nan,'Color',[0,0,0],'LineWidth',2);
-
 [points,faces,~,~] = IrregularSpherePoints(3e4);
 this.sphereMeshPatch = patch(...
 	'Vertices',points*this.backgroundSphereRadius,...
@@ -727,28 +822,15 @@ end
 			% CTRL+Y = redo 1 local action
 			% CTRL+SHIFT+Z = undo many local actions
 			% CTRL+SHIFT+Y = redo many local actions
-			if ismember('shift',event.Modifier)
-				undoRedoNum = this.settings.numUndoRedoWhenShifted;
-			else
-				undoRedoNum = 1;
-			end
 			
 			if strcmp(event.Key,'return') % CONFIRM
 				if this.toolIsLive
 					this.toolCallback('confirm');
 				end
 			elseif strcmp(event.Key,'z') && ismember('control',event.Modifier) % UNDO
-				if this.toolIsLive
-					this.toolCallback('undo',undoRedoNum);
-				else
-					this.operationManager('undo');
-				end
+				this.undoRedoCallback('undo');
 			elseif strcmp(event.Key,'y') && ismember('control',event.Modifier) % REDO
-				if this.toolIsLive
-					this.toolCallback('redo',undoRedoNum);
-				else
-					this.operationManager('redo');
-				end
+				this.undoRedoCallback('redo');
 			elseif strcmp(event.Key,'escape')
 				if this.toolIsLive
 					this.toolCallback('reject');
@@ -826,24 +908,56 @@ end
 	
 	% * * * * * * * * * * * * DATA MANAGEMENT * * * * * * * * * * * * * * *
 	properties (Access = private)
+		selection = {};
 	end
 	methods (Access = private)
+		% Callbacks for undo/redo. mode is 'undo' or 'redo'
+		function undoRedoCallback(this,mode)
+			
+			% Determine how to apply the undo call (locally or globally)
+			if this.toolIsLive % relinquish action to tool
+				% Determine how many items to undo
+				if ismember('shift',this.fig.CurrentModifier)
+					undoRedoNum = this.settings.numUndoRedoWhenShifted;
+				else
+					undoRedoNum = 1;
+				end
+				% Have the tool perform the undoing itself
+				this.toolCallback(mode,undoRedoNum);
+			else % Global undo
+				this.operationManager(mode);
+			end
+			
+		end
+		
 		% When loading a file from file, set the lastSaveDatenum to now()
 		
 		function operationManager(this,mode)
 			disp(mode);
+		end
+		
+		function replaceSelection(this,shapeObj)
+			this.removeSelection();
+			this.addToSelection(shapeObj);
+		end
+		function addToSelection(this,shapeObj)
+			this.selection{end+1} = shapeObj;
+			select(shapeObj)
+		end
+		function removeSelection(this)
+			for ind = 1:numel(this.selection)
+				deselect(this.selection{ind});
+			end
+			this.selection = {};
 		end
 	end
 	
 	
 	% * * * * * * * * * * * * * * TEMPORARY * * * * * * * * * * * * * * * *
 	properties (Access = public)
-		plot_;
-		dataStack = [];
-		maxAngleStep_rad = 0.02;
+		layers = Shape.empty(0,1);
 	end
 	methods (Access = public)
-		
 	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *

@@ -1,4 +1,4 @@
-classdef Shape < handle
+classdef Shape < matlab.mixin.Heterogeneous & handle
 % A shape object designed for spherical geometry (unit sphere)
 	
 	properties (GetAccess = public, SetAccess = private)
@@ -44,7 +44,7 @@ classdef Shape < handle
 		
 		% Redraw visuals without changing properties
 		function redraw(this)
-			this.updateVisualsInternal();
+			this.updateVisualsInternal(true); % forcibly redraw
 		end
 		
 		% Enter/leave markup mode
@@ -57,8 +57,8 @@ classdef Shape < handle
 		
 	end
 	methods (Access = protected, Abstract)
-		% Use isShown state to determine what to show
-		updateVisualsInternal(this);
+		% Use isShown state to determine what to show. force is optional
+		updateVisualsInternal(this,force);
 		% Is called whenever refPointsChanged is updated
 		refPointsChanged(this);
 	end

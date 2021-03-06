@@ -23,20 +23,28 @@ classdef HighlightPoints < handle
 	end
 	methods % Setters
 		function set.color(this,val)
-			this.color = val;
-			this.plotHandle.Color = this.color; %#ok<MCSUP>
+			if ~isequal(this.color,val) % Don't update if nothing changes
+				this.color = val;
+				this.plotHandle.Color = this.color; %#ok<MCSUP>
+			end
 		end
 		function set.lineWidth(this,val)
-			this.lineWidth = val;
-			this.plotHandle.LineWidth = this.lineWidth; %#ok<MCSUP>
+			if ~isequal(this.lineWidth,val) % Don't update if nothing changes
+				this.lineWidth = val;
+				this.plotHandle.LineWidth = this.lineWidth; %#ok<MCSUP>
+			end
 		end
 		function set.centerPoints(this,val)
-			this.centerPoints = val;
-			this.updatePlotData();
+			if ~isequal(this.centerPoints,val) % Don't update if nothing changes
+				this.centerPoints = val;
+				this.updatePlotData();
+			end
 		end
 		function set.radius(this,val)
-			this.radius = val;
-			this.updatePlotData();
+			if ~isequal(this.radius,val) % Don't update if nothing changes
+				this.radius = val;
+				this.updatePlotData();
+			end
 		end
 	end
 	methods (Access = private)

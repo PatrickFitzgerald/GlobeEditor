@@ -13,7 +13,7 @@ classdef Path < Shape
 		% Constructor
 		function this = Path(varargin)
 			this = this@Shape(varargin{:});
-			this.pathPlot = plot3(this.parentAx,nan,nan,nan);
+			this.pathPlot = plot3(this.parentAx,nan,nan,nan,'Color',[0,0,0],'LineWidth',1);
 		end
 		% Destructor
 		function delete(this)
@@ -22,8 +22,18 @@ classdef Path < Shape
 		
 	end
 	methods (Access = protected)
-		% Use isShown state to determine what to show
-		function updateVisualsInternal(this)
+		% Use isShown state to determine what to show. force is optional
+		function updateVisualsInternal(this,force)
+			
+			if ~exist('force','var')
+				force = false;
+			end
+			
+			if this.isSelected
+				this.pathPlot.LineWidth = 2;
+			else
+				this.pathPlot.LineWidth = 1;
+			end
 			
 			if this.isShown
 				if size(this.refPoints,1) < 2 % Too few to interpolate
