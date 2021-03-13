@@ -15,6 +15,7 @@ classdef GlobeManager < handle
 		zoomRate   = 1.025;
 		zoomBounds = [0.1,30];
 		panSpeeds  = [0.5,1.0]; % deg/scroll increment, [up/down,left/right]
+		panTime_s  = 1.0; % Default pan time used in public lookAtPoint() 
 		
 		% Temporary
 		eventState; % struct, see resetEventState()
@@ -22,6 +23,7 @@ classdef GlobeManager < handle
 		isPanAction = false;
 		remainingSpin_deg = 0; % Used to spin the up vector to correct orientation over time.
 		blindlyRejectEvents = false; % Whether we're spinning the up vector currently
+		runningAnimTimer = [];
 		
 	end
 	properties (SetAccess = public)
@@ -51,6 +53,7 @@ classdef GlobeManager < handle
 			
 			% Create the axes
 			this.ax = axes(varargin{:},...
+				'Units','pixels',...
 				'Projection','Perspective',...
 				'NextPlot','add',...
 				'Visible','off',...
@@ -110,6 +113,48 @@ classdef GlobeManager < handle
 		% Returns the current zoomAmount
 		function zoomAmount = getZoomAmount(this)
 			zoomAmount = this.zoomAmount;
+		end
+		
+		% Reorients the camera to view the specified point
+		% Optionally specify the time it should take to pan there.
+		function lookAtPoint(this,toPoint,panTime_s)
+			
+			% Sanitize input
+			toPoint = toPoint(:) / norm(toPoint);
+			
+			if ~exist('panTime_s','var')
+				panTime_s = this.panTime_s;
+			end
+			
+			% Check whether there's an animation already running
+			if ~isempty(this.runningAnimTimer)
+				try % Doing this asynchronously can cause problems...
+					terminate(this.runningAnimTimer); % Calls cleanup function
+				catch
+					this.runningAnimTimer = [];
+				end
+			end
+			% After this, assume it's empty and not running
+			
+			startLook = this.lookAtPos;
+			if panTime_s <= 0 % No animation
+				% Pan directly to the point
+				this.panHelper(toPoint,startLook,1.0);
+				this.updateView();
+			else % Perform animated pan
+				% Slowly pan to the new point.
+				startUp   = this.lookUpVector;
+				maxFPS_Hz = 60;
+				this.blindlyRejectEvents = true;
+				
+				this.runningAnimTimer = RepeatedTaskPerformer(...
+					1/maxFPS_Hz,panTime_s,...
+					@(elapsedTime_s) this.panLookAtPos(elapsedTime_s,panTime_s,startLook,startUp,toPoint),... % repeat callback
+					@() this.finishPanLookAtPos(toPoint,startLook,startUp),... % cleanup callback
+					false); % Don't start immediately, let the object get saved first
+				start(this.runningAnimTimer);
+			end
+			
 		end
 		
 	end
@@ -529,16 +574,29 @@ classdef GlobeManager < handle
 			
 			% Update the up vector settings
 			if doFlip % Uncommon behavior
+				
+				% Check whether there's an animation already running
+				if ~isempty(this.runningAnimTimer)
+					terminate(this.runningAnimTimer); % Calls cleanup function
+				end
+				% After this, assume it's empty and not running
+				
 				maxFPS_Hz = 60;
 				maxTime_s = 0.7;
 				this.remainingSpin_deg = 180;
 				this.blindlyRejectEvents = true;
-				RepeatedTaskPerformer(1/maxFPS_Hz,maxTime_s,...
+				this.runningAnimTimer = RepeatedTaskPerformer(...
+					1/maxFPS_Hz,maxTime_s,...
 					@(elapsedTime_s) this.spinUpVector(elapsedTime_s,maxTime_s),... % repeat callback
-					@() this.finishUpVectorSpin()); % cleanup callback
+					@() this.finishUpVectorSpin(),... % cleanup callback
+					false); % Don't start immediately, let the object get saved first
+				start(this.runningAnimTimer);
 			else % Normal behavior
 				this.ax.CameraUpVector = this.lookUpVector';
 			end
+			
+			% Actually force the update.
+			drawnow;
 			
 		end
 		% Asynchronously spins the lookUpVector 180 degrees over a short
@@ -563,8 +621,40 @@ classdef GlobeManager < handle
 		end
 		% Tidies up everything after the spinning.
 		function finishUpVectorSpin(this)
+			% Unlock the user controls
 			this.blindlyRejectEvents = false;
+			% If we didn't finish panning, do the rest all at once.
+			if this.remainingSpin_deg ~= 0
+				this.spinUpVector(1,1); % Will force it to finish
+			end
+			% Mark it as no animations running.
+			this.runningAnimTimer = [];
 		end
+		% Performs a smooth animation for the public lookAtPoint() method.
+		function panLookAtPos(this,elapsedTime_s,panTime_s,startLook,startUp,toLook)
+			% Reset the camera settings to the default, so the panHelper
+			% handles all the details of interpolation.
+			this.lookAtPos    = startLook;
+			this.lookUpVector = startUp;
+			% Let panHelper do the rest
+			this.panHelper(toLook,startLook, clamp(elapsedTime_s/panTime_s,0,1) );
+			this.updateView();
+		end
+		% Cleans up after the public lookAtPoint() method.
+		function finishPanLookAtPos(this,toPoint,startLook,startUp)
+			% Unlock the user controls
+			this.blindlyRejectEvents = false;
+			% If we didn't finish panning, do it all at once. 
+			if ~all(this.lookAtPos == toPoint)
+				this.lookAtPos    = startLook;
+				this.lookUpVector = startUp;
+				this.panHelper(toPoint,startLook,1.0);
+				this.updateView();
+			end
+			% Mark it as no animations running.
+			this.runningAnimTimer = [];
+		end
+		
 	end
 	
 end
