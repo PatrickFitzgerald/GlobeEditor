@@ -1,6 +1,24 @@
 function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints)
 	% Finds saved set with that many points, or makes it.
 	
+	visualsMode = 1; % facet perimeter
+% 	visualsMode = 2; % point velocities
+% 	visualsMode = 3; % no coloring
+% 	visualsMode = 4; % no visuals at all
+	
+	plotChance = 1.0;
+	absTol = 1e-4; % denotes sufficient convergence
+	maxDisplacement = 0.005;
+	maxTimeStep = 1;
+	timeSlowAmount = 50;
+	
+	maxTimeIterCap = 1;
+	maxTimeGrowth = 0;
+	
+	oscillationSlowPower = 0.9;
+	
+	printoutPeriod_s = 5;
+	
 	[folder,~,~] = fileparts(mfilename('fullpath'));
 	path_ = fullfile(folder,sprintf('sphere points %u.mat',numPoints));
 	if exist(path_,'file')
@@ -16,12 +34,10 @@ function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints
 	% Define the initial points
 	% It turns out placing them all COMPLETELY randomly is a poor starting
 	% condition
-	% 	irregSpherePoints = randn(numPoints,1,3); % effectively zero chance they're zero vectors
-	% 	irregSpherePoints = irregSpherePoints ./ dist(irregSpherePoints,0);
 	dTheta_rad = sqrt(4*pi/numPoints);
 	dTheta_rad = pi / ceil(pi / dTheta_rad);
 	thetas_rad = dTheta_rad/2 : dTheta_rad : pi; % use the thetas on center
-	irregSpherePoints = nan(numPoints*2,1,3); % Oversize
+	points = nan(numPoints*2,3); % Oversize
 	lastRow = 0;
 	maxJitter = 1; % relative to that dimension's spacing
 	for theta_rad = thetas_rad
@@ -32,56 +48,128 @@ function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints
 		newRows = lastRow + (1:numToAdd);
 		tempTheta_rad = theta_rad + dTheta_rad * maxJitter * (rand(numToAdd,1)-0.5);
 		tempPhi_rad   = phis_rad  + dPhi_rad   * maxJitter * (rand(numToAdd,1)-0.5);
-		irregSpherePoints(newRows,1,1) = cos(tempPhi_rad) .* sin(tempTheta_rad);
-		irregSpherePoints(newRows,1,2) = sin(tempPhi_rad) .* sin(tempTheta_rad);
-		irregSpherePoints(newRows,1,3) = ones(numToAdd,1) .* cos(tempTheta_rad);
+		points(newRows,1) = cos(tempPhi_rad) .* sin(tempTheta_rad);
+		points(newRows,2) = sin(tempPhi_rad) .* sin(tempTheta_rad);
+		points(newRows,3) = ones(numToAdd,1) .* cos(tempTheta_rad);
 		lastRow = lastRow + numToAdd;
 	end
 	% Trim off unused rows
-	irregSpherePoints(lastRow+1:end,:,:) = [];
+	points(lastRow+1:end,:) = [];
 	% To make them a bit more random, let's jitter their locations
 	% irregSpherePoints = irregSpherePoints + randn(size(irregSpherePoints)) * dTheta_rad/7;
 	% irregSpherePoints = irregSpherePoints ./ dist(irregSpherePoints,0);
 	
 	
 	
-	f = figure;
-	plot_ = plot3(irregSpherePoints(:,1,1),irregSpherePoints(:,1,2),irregSpherePoints(:,1,3),'k.');
-	hold on;
-	daspect([1,1,1]);
-	axis vis3d;
-	axis([-1,1,-1,1,-1,1])
+	numPoints = size(points,1);
 	
-	[x,y,z] = sphere(500);
-	shrink = 0.99;
-	surf(x*shrink,y*shrink,z*shrink,'EdgeColor','none','FaceColor','w')
 	
-	drawnow
 	
-	% Now perturb the points to be as far away as possible from the other
-	% points
-	convergenceSpeed = 0.05;% 5e-2/numPoints;
-	oldPoints = inf(size(irregSpherePoints));
+	if visualsMode == 1 % facet perimeter
+		patchSettings = {'FaceColor','flat','EdgeColor','none','FaceVertexCData',nan(0,3)};
+	elseif visualsMode == 2 % point velocities
+		patchSettings = {'FaceColor','interp','EdgeColor','none','FaceVertexCData',nan(0,3)};
+	elseif visualsMode == 3 % No coloring
+		patchSettings = {'FaceColor','k','EdgeColor','w'};
+	end
+	
+	if visualsMode ~= 4
+		close all
+		figure('Position',[100,200,800,800],'DockControls','off','MenuBar','none','ToolBar','default','Color','k')
+		globeManager = GlobeManager();
+		ax1 = globeManager.getAxesHandle();
+		colormap(hot(512));
+		patch_ = patch('Parent',ax1,'Vertices',points,'Faces',nan(0,3),patchSettings{:});
+		ax2 = axes('OuterPosition',[0.5,0,0.5,0.1]);
+		ax3 = axes('OuterPosition',[0,0,0.5,0.1]);
+		pause(0.3)
+	end
+	
+	
+	oldPoints = inf(1,3);
+	oldFaces  = nan(1,3);
+	oldVelocities = zeros(numPoints,3);
+	oscillationLifetimes = zeros(numPoints,1);
 	iter = 0;
-	while max(max(abs(irregSpherePoints - oldPoints))) > 1e-4
+	timer_ = tic();
+	lastPrintout = toc(timer_);
+	while true
 		
-		oldPoints = irregSpherePoints;
+		faces = convhulln(points);
+		edges = [faces(:,[1,2]);faces(:,[2,3]);faces(:,[3,1])]; % Kx2, each direction is its own vector
+		displacements = points(edges(:,2),:) - points(edges(:,1),:);
+		lengths = sqrt(sum(displacements.^2,2));
+		forces_e = (1 - mean(lengths)./lengths) .* displacements; % equivalent to (lengths - mean(lengths(:))) .* edgeDirs; with edgeDirs as unit vectors
 		
-		displace = nansum( force(irregSpherePoints,permute(irregSpherePoints,[2,1,3])), 2); % force of a point on itself will be nan, omit from sum
-		displace = displace / max(dist(displace,0));
-		irregSpherePoints = irregSpherePoints + displace * convergenceSpeed / (1+(iter/10)^2);
-		irregSpherePoints = irregSpherePoints ./ dist(irregSpherePoints,0); % renormalize
-		plot_.XData = irregSpherePoints(:,1,1);
-		plot_.YData = irregSpherePoints(:,1,2);
-		plot_.ZData = irregSpherePoints(:,1,3);
-		drawnow
-		pause(0.05)
+		forces_p = nan(numPoints,3);
+		forces_p(:,1) = accumarray([edges(:,1);edges(:,2)],[forces_e(:,1);-forces_e(:,1)],[numPoints,1]);
+		forces_p(:,2) = accumarray([edges(:,1);edges(:,2)],[forces_e(:,2);-forces_e(:,2)],[numPoints,1]);
+		forces_p(:,3) = accumarray([edges(:,1);edges(:,2)],[forces_e(:,3);-forces_e(:,3)],[numPoints,1]);
+		
+		velocities = forces_p / 1.0;
+		
+		velMag = sqrt(sum(velocities.^2,2));
+		maxVelMag = max(velMag);%sqrt(max(sum(velocities.^2,2)));
+		dt_s = maxDisplacement / maxVelMag * timeSlowAmount^2/(timeSlowAmount^2+iter^2);
+		dt_s = min(dt_s,maxTimeStep*sqrt(1+maxTimeGrowth^2*iter^2/maxTimeIterCap^2)); % Time cap will be small at first, the grow linearly
+		
+		
+		flippedDirection = sum(velocities .* oldVelocities,2) < 0;
+		oscillationLifetimes(~flippedDirection) = 0;
+		oscillationLifetimes(flippedDirection) = oscillationLifetimes(flippedDirection) + 1;
+		
+		
+		points = points + velocities * dt_s .* oscillationSlowPower .^ oscillationLifetimes;
+		points = points ./ sqrt(sum(points.^2,2)); % Normalize points
+		
+		if visualsMode ~= 4 && rand < plotChance
+			
+			patch_.Vertices = points;
+			patch_.Faces = faces;
+			
+			if visualsMode == 1 % facet perimeter
+				% There are exactly 3x more edges than faces
+				perimeters = lengths(1:end/3) + lengths(end/3+1:2*end/3) + lengths(2*end/3+1:end);
+				patch_.FaceVertexCData = perimeters;
+			elseif visualsMode == 2 % point velocities
+				patch_.FaceVertexCData = velMag;
+			elseif visualsMode == 3 % No coloring
+				% nothing
+			end
+			if ismember(visualsMode,[1,2])
+				caxis(ax1,[min(patch_.FaceVertexCData),max(patch_.FaceVertexCData)])
+% 				caxis(ax1,[0,2*mean(patch_.FaceVertexCData)])
+			end
+			
+			histogram(ax2,lengths/mean(lengths),'FaceColor','w','FaceAlpha',1,'EdgeColor','none');
+			xlim(ax2,[0,2])
+			ax2.Visible = 'off';
+			
+			histogram(ax3,log(velMag),'FaceColor','w','FaceAlpha',1,'EdgeColor','none');
+			xlim(ax3,[-10,0])
+			ax3.Visible = 'off';
+			
+			drawnow
+		end
+		
+		pointChange = sqrt(max(sum((oldPoints-points).^2)));
+		if (isequal(oldFaces,faces) || toc(timer_)>15*60) && pointChange < absTol
+			break
+		end
+		oldPoints = points;
+		oldFaces  = faces;
+		oldVelocities = velocities;
 		iter = iter + 1;
 		fprintf('.')
+		if (toc(timer_) - lastPrintout) > printoutPeriod_s
+			lastPrintout = toc(timer_);
+			fprintf(' Delta = %.2e, Time = %.1f sec\n',pointChange,lastPrintout);
+		end
+		
 	end
-	fprintf('\n')
 	
-	points = permute(irregSpherePoints,[1,3,2]);
+	
+	
 	faces  = convhulln(points);
 	
 	
@@ -93,24 +181,9 @@ function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints
 	
 	save(path_,'points','faces','circumCenters','dotRadii');
 	
-	clf
-	patch('Vertices',points,'Faces',faces,'FaceColor','w')
-	daspect([1,1,1]);
-	axis vis3d
+	fprintf('\nDone.\n\n')
 	
 	pause(3)
-	close(f);
-	
-	
-	function dist_ = dist(a,b)
-		dist_ = sqrt(sum((a-b).^2,3)); % x,y,z are along third dim
-	end
-	function force_ = force(a,b)
-		dist_ = dist(a,b);
-		mag = 1./dist_.^2;
-		effMinDist = 20e-3;
-		mag = min(mag,1/effMinDist^2);
-		force_ = (a-b) ./ dist_ .* mag;
-	end
+	close(gcf);
 
 end
