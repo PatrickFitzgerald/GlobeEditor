@@ -12,7 +12,7 @@ classdef RepeatedTaskPerformer < handle
 	
 	methods (Access = public)
 		% Constructor
-		function this = RepeatedTaskPerformer(minPeriod_s,maxRunDuration_s,callback,cleanupFunc)
+		function this = RepeatedTaskPerformer(minPeriod_s,maxRunDuration_s,callback,cleanupFunc,startImmediately)
 			
 			% To avoid a warning, truncate the minPeriod_s to milliseconds
 			minPeriod_s = round(minPeriod_s,3);
@@ -21,7 +21,7 @@ classdef RepeatedTaskPerformer < handle
 			this.timerObj = timer();
 			set(this.timerObj,...
 				'TimerFcn',@(~,~)this.internalCallback(),...
-				'BusyMode','queue',...
+				'BusyMode','drop',...
 				'ExecutionMode','fixedRate',...
 				'Period',minPeriod_s,...
 				'TasksToExecute',inf ...
@@ -30,17 +30,34 @@ classdef RepeatedTaskPerformer < handle
 			this.startTime_d = now();
 			this.callback = callback;
 			this.cleanupFunc = cleanupFunc;
-			% Start the timer.
-			start(this.timerObj);
+			
+			% Conditionally start the timer immediately
+			if startImmediately
+				% Start the timer.
+				start(this.timerObj);
+			end
 		end
-		% A helper function to stop the timer early.
+		% Starts the timer. Does nothing if it was already started, or if
+		% it has already finished or been terminated early.
+		function start(this)
+			if ~this.earlyHalt && strcmp(this.timerObj.Running,'off')
+				start(this.timerObj);
+			end
+		end
+		% A helper function to stop the timer early. Calls the cleanup
+		% function (as long as the timer is running)
 		function terminate(this)
+			wasRunning = isvalid(this.timerObj) && strcmp(this.timerObj.Running,'on');
 			this.earlyHalt = true;
 			try
 				stop(this.timerObj);
 			catch err %#ok<NASGU>
 			end
 			delete(this.timerObj);
+			% Only run the cleanup function if the timer was ever started
+			if wasRunning
+				this.cleanupFunc();
+			end
 		end
 	end
 	methods (Access = private)
@@ -61,9 +78,8 @@ classdef RepeatedTaskPerformer < handle
 			
 			% Prevent this from running again in the future.
 			if elapsedTime_s > this.maxRunDuration_s
-				% Invoke the cleanup function
-				this.cleanupFunc();
-				% And halt the timer going forward
+				% Cleans up the timer object, and calls the cleanup
+				% function.
 				this.terminate();
 			end
 		end
