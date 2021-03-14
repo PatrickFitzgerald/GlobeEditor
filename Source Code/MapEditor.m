@@ -12,9 +12,6 @@ classdef MapEditor < handle
 		% Constructor
 		function this = MapEditor()
 			
-			% Manage matlab path
-			AddPaths;
-			
 			% Initialize settings save delay manager
 			this.initSettingsSaving();
 			% Load settings, if available
@@ -946,7 +943,9 @@ end
 		end
 		function removeSelection(this)
 			for ind = 1:numel(this.selection)
-				deselect(this.selection{ind});
+				if isvalid(this.selection{ind})
+					deselect(this.selection{ind});
+				end
 			end
 			this.selection = {};
 		end
@@ -958,6 +957,10 @@ end
 		layers = Shape.empty(0,1);
 	end
 	methods (Access = public)
+		function lookAtRand(this)
+			this.globeManager.lookAtPoint(rand(1,3));
+			this.globeManager.lookAtPoint(rand(1,3));
+		end
 	end
 	
 	% * * * * * * * * * * * * * * * IDEAS * * * * * * * * * * * * * * * * *
@@ -1017,5 +1020,14 @@ end
 	%        layer/layer modifier which can have the underlying borders
 	%        modified separately.
 	% import/save/export
+	
+	
+	% FIX:
+	%    GlobeManager.runningAnimTimer isn't working correctly,
+	%    specifically GlobeManager.lookAtPoint(). Running several of those
+	%    in quick succession does not terminate earlier ones. It's acting
+	%    like it's running sequentially, but the external code execution
+	%    finishes very quickly.
+	
 	
 end
