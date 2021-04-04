@@ -179,11 +179,6 @@ classdef GlobeManager < handle
 			% Check some click location conditions if we are testing a new
 			% event
 			if ~this.isSustained
-				% If the click isn't even inside the axes, discard it
-				intersectsGood = checkIntersectionRect(this.fig.CurrentPoint,this.ax.OuterPosition);
-				if ~intersectsGood
-					return
-				end
 				% If the cursor is inside one of the no click zones,
 				% discard it
 				intersectsBad = checkIntersectionRect(this.fig.CurrentPoint,this.noClickZones);

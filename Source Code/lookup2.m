@@ -1,6 +1,7 @@
-[points,faces,circumCenters,dotRadii] = IrregularSpherePoints(300000);
+[points,faces,circumCenters,dotRadii] = IrregularSpherePoints(1000);
 
-tic()
-sm = SphereMesh(points,faces,circumCenters,dotRadii);
-toc()
+% tic()
+% sm = SphereMesh(points,faces,circumCenters,dotRadii);
+% toc()
 
+ps = PerlinSurface(1000);

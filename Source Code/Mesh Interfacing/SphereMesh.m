@@ -4,7 +4,7 @@ classdef SphereMesh < handle
 		points;
 		faces;
 	end
-	properties (Access = private)
+	properties (Access = protected)
 		refLevelSizes = [10,50,250,1000,5000,20000,100000,500000];
 		
 		maxLevel;
@@ -14,14 +14,15 @@ classdef SphereMesh < handle
 		ref_faces;
 		ref_circumCenters;
 		ref_dotRadii;
+		ref_halfAreas;
 		
 		pertinentSubTriangles;
 	end
-	properties (Access = private, Constant)
+	properties (Access = protected, Constant)
 		debugSequencing = false;
 		debugSearching  = true;
 	end
-	properties (Access = private) % PLOTTING DEBUG
+	properties (Access = protected) % PLOTTING DEBUG
 		fig;
 		globe;
 		ax;
@@ -47,25 +48,20 @@ classdef SphereMesh < handle
 			this.ref_faces         = cell(this.maxLevel,1);
 			this.ref_circumCenters = cell(this.maxLevel,1);
 			this.ref_dotRadii      = cell(this.maxLevel,1);
+			this.ref_halfAreas     = cell(this.maxLevel,1);
 			for level = 1:this.maxLevel-1 % omit the last one
 				[this.ref_points{level},this.ref_faces{level},this.ref_circumCenters{level},this.ref_dotRadii{level}] = IrregularSpherePoints(this.refLevelSizes(level));
+				this.ref_halfAreas{level} = this.getHalfAreaFace(this.ref_points{level},this.ref_faces{level});
 			end
 			% Fill in the actual points as the final level.
 			this.ref_points{end}        = points;
 			this.ref_faces{end}         = faces;
 			this.ref_circumCenters{end} = circumCenters;
 			this.ref_dotRadii{end}      = dotRadii;
+			this.ref_halfAreas{end}     = this.getHalfAreaFace(points,faces);
 			
 			% Get the number of triangles/circles in each level
 			this.sizes = cellfun(@(ref_faces_) size(ref_faces_,1), this.ref_faces);
-			
-			% Perform a quick check to ensure the sequencing can work
-			% Double check what we've done is reliable
-minRadius = cellfun(@(e)acos(max(e)),this.ref_dotRadii);
-maxRadius = cellfun(@(e)acos(min(e)),this.ref_dotRadii);
-if ~all( maxRadius(2:end) < minRadius(1:end-1) ) % max radius of level L+1 must be less than the min radius of level L
-	error('Size decrease assumption not met.')
-end		
 			
 			% Now, sequence the membership for faster searching later
 			this.sequenceMembership()
@@ -73,18 +69,21 @@ end
 		end
 		
 		% Helper function to find the faces which contain specified
-		% sphere-points. testPoints should be Nx3
-		function [faceInds] = search(this,testPoints)
+		% sphere-points. Also returns the Barycentric style coordinates,
+		% uvw, of each testPoint within that containing triangle.
+		% testPoints should be Nx3
+		function [faceInds,uvw] = search(this,testPoints)
 			
 			% Normalize test points, just to be safe
 			testPoints = testPoints ./ sqrt(sum(testPoints.^2,2));
 			
 			numTestPoints = size(testPoints,1);
 			faceInds = nan(numTestPoints,1);
+			uvw      = nan(numTestPoints,3);
 			for pointInd = 1: numTestPoints
 				
 				% Extract off the test point in question
-				testPoint = testPoints(pointInd,:);
+				tp = testPoints(pointInd,:);
 				
 				% For each level of reference points, recursively search
 				% over possible circumcircle-intersections, then go to the
@@ -99,7 +98,7 @@ end
 						this.debugMeshShow(level,worthChecking,false);
 					end
 					% Check these circumcircles for intersection
-					match = sum(this.ref_circumCenters{level}(worthChecking,:) .* testPoint,2) > this.ref_dotRadii{level}(worthChecking);
+					match = sum(this.ref_circumCenters{level}(worthChecking,:) .* tp,2) >= this.ref_dotRadii{level}(worthChecking);
 					% Downsize the list to just what still holds promise
 					worthChecking(~match) = [];
 				end
@@ -107,28 +106,31 @@ end
 				% true points/faces list, and we have no choice but to
 				% explicitly check for intersection in these triangles.
 				
-				foundFace = false;
-				for faceInd = worthChecking(:)'
-					% Extract off the triangle's vertices
-					abc = this.points(this.faces(faceInd,:),:);
-					if det([abc([1,2],:);testPoint]) > 0 && ...
-					   det([abc([2,3],:);testPoint]) > 0 && ...
-					   det([abc([3,1],:);testPoint]) > 0
-						% Intersection, can stop searching.
-						foundFace = true;
-						break
-					end
-				end
+				% For the point to be present inside a triangle, it must
+				% have uvw coordinates all positive.
+				p1 = this.ref_points{end}( this.ref_faces{end}(worthChecking,1), :);
+				p2 = this.ref_points{end}( this.ref_faces{end}(worthChecking,2), :);
+				p3 = this.ref_points{end}( this.ref_faces{end}(worthChecking,3), :);
+				uvwLocal = [... % Define UVW as the ratio between halfAreas (hence the ratio of areas)
+					this.getHalfAreaPoints(tp,p2,p3),...
+					this.getHalfAreaPoints(p1,tp,p3),...
+					this.getHalfAreaPoints(p1,p2,tp)] ./ this.ref_halfAreas{end}(worthChecking);
+				% Find the first uvw triple which are all nonnegative. If
+				% the point is on an edge, there could be multiple, just
+				% grab the first.
+				faceIndInd = find(any(uvwLocal>=0,2),1,'first');
+				faceInd = worthChecking(faceIndInd);
 				% Now, either the faces we were given weren't actually a
 				% cover for the sphere, or we have terminated successfully
 				if ~foundFace
-					error('Failed to find [%g,%g,%g]',testPoint);
+					error('Failed to find [%g,%g,%g]',tp);
 				end
 				if this.debugSearching
 					this.debugMeshShow(level,faceInd,false);
 				end
 				% Assume valid
 				faceInds(pointInd) = faceInd;
+				uvw(pointInd,:) = uvwLocal(faceIndInd,:);
 			end
 			
 		end
@@ -253,7 +255,41 @@ end
 		end
 		
 	end
-	methods (Access = private) % PLOTTING DEBUG
+	
+	methods (Access = protected, Static)
+		
+		% This is more of a wrapper for data represented as face lists to
+		% the format supported by getHalfAreaPoints. This calculates half
+		% the surface area of each spherical triangle.
+		function halfAreas_ = getHalfAreaFace(points,faces)
+			halfAreas_ = this.getHalfAreaPoints(...
+				points(faces(:,1),:),...
+				points(faces(:,2),:),...
+				points(faces(:,3),:));
+		end
+		
+		% Calculates the signed (half) area specified by the points p1,p2,p3.
+		% Multiple areas can be calculated at once by having a separate set
+		% of vectors on each row. p1,p2,p3 MUST be unit vectors.
+		function halfAreas_ = getHalfAreaPoints(p1,p2,p3)
+			% The determinant of [p1;p2;p3] is equal to dot(p1,cross(p2,p3))
+			% (for all p1,p2,p3 single vectors). This is written out
+			% explicily to handle the many simultaneous vectors at once.
+			det_ = ...
+				+ p1(:,1).*p2(:,2).*p3(:,3)...
+				+ p1(:,2).*p2(:,3).*p3(:,1)...
+				+ p1(:,3).*p2(:,1).*p3(:,2)...
+				- p3(:,1).*p2(:,2).*p1(:,3)...
+				- p3(:,2).*p2(:,3).*p1(:,1)...
+				- p3(:,3).*p2(:,1).*p1(:,2);
+			% From eq 6 of Lei, Qi, and Tian: A New Coordinate System for
+			% Constructing Spherical Grid Systems.
+			halfAreas_ = atan( det_./( 1 + sum(p1.*p2,2) + sum(p2.*p3,2) + sum(p3.*p1,2) ) );
+		end
+		
+	end
+	
+	methods (Access = protected) % PLOTTING DEBUG
 		
 		% Prepares the plots
 		function prepVisuals(this)
