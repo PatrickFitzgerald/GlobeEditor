@@ -35,7 +35,7 @@ classdef PerlinSurface < SphereMesh
 			% weights at the test point relative to the vertices that
 			% enclose it.
 			tp = this.ref_points{end};
-			numTP = this.sizes(end);
+			numTP = size(tp,1); % this.sizes is specifically for the number of faces, not points.
 			% We don't need to record the final level, since the test
 			% points are trivially related to themselves.
 			this.interpDefinition = nan(numTP,7,this.maxLevel-1); % Will be trimmed later.
@@ -50,7 +50,7 @@ classdef PerlinSurface < SphereMesh
 			
 			% This will be used at the end of each loop for the interpolant
 			% generation
-			interpolant1D = @(X) (1-cos(  pi*(  x - 0.038*sin(2*pi*x)  )  ))/2;
+			interpolant1D = @(x) (1-cos(  pi*(  x - 0.038*sin(2*pi*x)  )  ))/2;
 			
 			for level = 1:this.maxLevel-1
 				
@@ -59,10 +59,10 @@ classdef PerlinSurface < SphereMesh
 				% the pieces which are related (pertinentSubTriangles) to
 				% the previous level's result.
 				if level == 1
-					worthCheckingCell = repmat( this.pertinentSubTriangles(1), numTP,1); % No previous work to leverage
+					worthCheckingCell = repmat( this.pertinentSubTriangles{1}, numTP,1); % No previous work to leverage
 				else
 					prevLevelFaces = this.interpDefinition(:,1,level-1); % Use face inds from previous level.
-					worthCheckingCell = this.pertinentSubTriangles{level-1}(prevLevelFaces);
+					worthCheckingCell = this.pertinentSubTriangles{level}(prevLevelFaces);
 				end
 				% worthCheckingCell is a cell array of size numTP x 1. Each
 				% entry is the set of faces at the current level that are
@@ -123,6 +123,17 @@ classdef PerlinSurface < SphereMesh
 				d_3_12 = (1-d_3) .* (W.^2./(W.^2 + U.^2.*V.^2))  +  W .* (U.^2.*V.^2./(W.^2 + U.^2.*V.^2));
 				% Now perform the 1D mapping
 				weights = [interpolant1D(d_1_23),interpolant1D(d_2_31),interpolant1D(d_3_12)];
+				% There are several ways the above calculation can result
+				% in nan: For example: d_1 could be nan if both V and W are
+				% zero; d_1_23 could be nan if both U was zero and V OR W
+				% was zero; similarly for d_2,d_3 and d_2_31,d_3_12.
+				% However, fixing it is easy, since in any of these cases,
+				% the test point is perfectly coincident with the enclosing
+				% vertices, so there's not really any interpolation
+				% happening. As such, we may simply use the [U,V,W]
+				% coordinates as the true weights (which are not nan).
+				problem = any(isnan(weights),2);
+				weights(problem,:) = uvwAll(absoluteMatchInds(problem),:);
 				
 				
 				% Save all the results in the interpDefinition matrix.

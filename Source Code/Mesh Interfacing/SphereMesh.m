@@ -147,7 +147,7 @@ classdef SphereMesh < handle
 			numberOfAnnouncements = 100;
 			
 			this.pertinentSubTriangles = cell(this.maxLevel,1);
-			this.pertinentSubTriangles{1} = {1:this.sizes(1)}; % The first level will be all circles, since at that point we haven't narrowed anything down yet
+			this.pertinentSubTriangles{1} = {(1:this.sizes(1))'}; % The first level will be all circles, since at that point we haven't narrowed anything down yet
 			for level = 2:this.maxLevel % Check all the finer levels
 				
 				fprintf('Processing level %u\n\t',level)
@@ -262,7 +262,7 @@ classdef SphereMesh < handle
 		% the format supported by getHalfAreaPoints. This calculates half
 		% the surface area of each spherical triangle.
 		function halfAreas_ = getHalfAreaFace(points,faces)
-			halfAreas_ = this.getHalfAreaPoints(...
+			halfAreas_ = SphereMesh.getHalfAreaPoints(...
 				points(faces(:,1),:),...
 				points(faces(:,2),:),...
 				points(faces(:,3),:));
