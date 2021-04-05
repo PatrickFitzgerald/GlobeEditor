@@ -1,4 +1,4 @@
-function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints)
+function [points,faces,circumCenters,dotRadii,hash] = IrregularSpherePoints(numPoints)
 	% Finds saved set with that many points, or makes it.
 	
 	visualsMode = 1; % facet perimeter
@@ -23,7 +23,7 @@ function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints
 	path_ = fullfile(folder,sprintf('sphere points %u.mat',numPoints));
 	if exist(path_,'file')
 		try
-			load(path_,'points','faces','circumCenters','dotRadii');
+			load(path_,'points','faces','circumCenters','dotRadii','hash');
 			% If the load was successful return those loaded values.
 			return
 		catch err %#ok<NASGU>
@@ -177,9 +177,11 @@ function [points,faces,circumCenters,dotRadii] = IrregularSpherePoints(numPoints
 	faces = correctEdgeOrder(faces,points); % Ensure the edges are in CCW order
 	[circumCenters,dotRadii] = getCircumcircle(faces,points); % Determine circumcenters and dotradii
 	
+	hash = DataHash(...
+		points,... % Everything is determined from points, so may as well only depend on that.
+		'array','base64','MD5');
 	
-	
-	save(path_,'points','faces','circumCenters','dotRadii');
+	save(path_,'points','faces','circumCenters','dotRadii','hash');
 	
 	fprintf('\nDone.\n\n')
 	
