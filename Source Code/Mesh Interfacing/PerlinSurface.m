@@ -2,6 +2,13 @@ classdef PerlinSurface < SphereMesh
 	
 	properties 
 		interpDefinition;
+		
+		seed;
+		directions;
+	end
+	
+	properties (Access = protected, Constant)
+		debugInterpSetup = false;
 	end
 	
 	methods (Access = public)
@@ -17,6 +24,47 @@ classdef PerlinSurface < SphereMesh
 			
 			% Let's invoke our specialized setup function
 			this.precomputeInterpolation();
+			
+			
+			this.prepVisuals();
+			% Turn off all level patches and circles
+			for tempLevel = 1:this.maxLevel
+				this.debugMeshShow(tempLevel,[],false); % Base class function. Show none at the temp level
+			end
+			this.seed = 123323;
+			rng(this.seed);
+			this.directions = cell(this.maxLevel-1,1);
+			for level = 1:this.maxLevel-1
+				refPoints = this.ref_points{level};
+				% Generate random vectors
+				this.directions{level} = randn(size(refPoints,1),3);
+				% Remove all radial components
+				this.directions{level} = this.directions{level} - sum(this.directions{level}.*refPoints,2).*refPoints;
+				% Normalize
+				this.directions{level} = this.directions{level} ./ sqrt(sum(this.directions{level}.^2,2));
+% Will need to normalize based on triangle length scale...
+			end
+			
+			a = gobjects(0);
+			
+			tp = this.ref_points{end};
+			funcVals = zeros(size(tp,1),1);
+			scales = 4.^(1:this.maxLevel-1);
+			for level = 1:this.maxLevel-1
+				for vertexInd = 1:3
+				funcVals = funcVals + ...
+					scales(level) * ... % correct to desired scale
+					sum(   this.directions{level}(  this.interpDefinition(:,vertexInd,level)  ).*tp,   2) .* ... % ramp along direction
+					this.interpDefinition(:,3+vertexInd,level); % scale by weight
+				end
+			end
+			
+			funcVals = funcVals + randn(size(funcVals));
+			funcVals = funcVals + tp(:,3)*100;
+			
+			a = [a,tricontour(this.ref_faces{end},this.ref_points{end},funcVals,[0,0],'Parent',this.ax)];
+			
+			
 			
 		end
 		
@@ -51,6 +99,16 @@ classdef PerlinSurface < SphereMesh
 			% This will be used at the end of each loop for the interpolant
 			% generation
 			interpolant1D = @(x) (1-cos(  pi*(  x - 0.038*sin(2*pi*x)  )  ))/2;
+			
+			% Debug prep
+			if this.debugInterpSetup
+				this.prepVisuals(); % Base class function
+				customPatch = patch('Parent',this.ax,'Vertices',tp,'Faces',this.ref_faces{end},'FaceColor','interp','EdgeColor','k','FaceVertexCData',ones(numTP,1));
+				% Turn off all level patches and circles
+				for tempLevel = 1:this.maxLevel
+					this.debugMeshShow(tempLevel,[],false); % Base class function. Show none at the temp level
+				end
+			end
 			
 			for level = 1:this.maxLevel-1
 				
@@ -140,6 +198,14 @@ classdef PerlinSurface < SphereMesh
 				this.interpDefinition(:,1,  level) = worthChecking(absoluteMatchInds);
 				this.interpDefinition(:,2:4,level) = this.ref_faces{level}( worthChecking(absoluteMatchInds), :);
 				this.interpDefinition(:,5:7,level) = weights ./ sum(weights,2); % Force weights sum to unity
+				
+				
+				if this.debugInterpSetup
+					% Update the customPatch
+					customPatch.FaceVertexCData = weights ./ sum(weights,2);
+					drawnow
+					pause(5);
+				end
 				
 			end
 			

@@ -20,7 +20,7 @@ classdef SphereMesh < handle
 	end
 	properties (Access = protected, Constant)
 		debugSequencing = false;
-		debugSearching  = true;
+		debugSearching  = false;
 	end
 	properties (Access = protected) % PLOTTING DEBUG
 		fig;
@@ -305,7 +305,7 @@ classdef SphereMesh < handle
 			
 			% Place a white opaque sphere at the r=1 sphere.
 			patch(...
-				'Vertices',this.ref_points{1},... % Use the first reference content, since it will be the smallest, and the coarsest.
+				'Vertices',this.ref_points{1}*0.95,... % Use the first reference content, since it will be the smallest, and the coarsest.
 				'Faces',this.ref_faces{1},...     % ^
 				'FaceColor','w',...
 				'EdgeColor','none');
